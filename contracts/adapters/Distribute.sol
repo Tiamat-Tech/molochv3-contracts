@@ -9,6 +9,7 @@ import "../guards/AdapterGuard.sol";
 import "../adapters/interfaces/IVoting.sol";
 import "../adapters/interfaces/IDistribute.sol";
 import "../helpers/FairShareHelper.sol";
+import "../helpers/DaoHelper.sol";
 import "../extensions/bank/Bank.sol";
 
 /**
@@ -43,7 +44,12 @@ contract DistributeContract is
 {
     // Event to indicate the distribution process has been completed
     // if the unitHolder address is 0x0, then the amount were distributed to all members of the DAO.
-    event Distributed(address token, uint256 amount, address unitHolder);
+    event Distributed(
+        address daoAddress,
+        address token,
+        uint256 amount,
+        address unitHolder
+    );
 
     // The distribution status
     enum DistributionStatus {NOT_STARTED, IN_PROGRESS, DONE, FAILED}
@@ -270,7 +276,7 @@ contract DistributeContract is
         if (unitHolderAddr != address(0x0)) {
             _distributeOne(bank, unitHolderAddr, blockNumber, token, amount);
             distribution.status = DistributionStatus.DONE;
-            emit Distributed(token, amount, unitHolderAddr);
+            emit Distributed(address(dao), token, amount, unitHolderAddr);
         } else {
             // Set the max index supported which is based on the number of members
             uint256 nbMembers = dao.getNbMembers();
@@ -292,7 +298,7 @@ contract DistributeContract is
             distribution.currentIndex = maxIndex;
             if (maxIndex == nbMembers) {
                 distribution.status = DistributionStatus.DONE;
-                emit Distributed(token, amount, unitHolderAddr);
+                emit Distributed(address(dao), token, amount, unitHolderAddr);
             }
         }
     }
@@ -308,9 +314,10 @@ contract DistributeContract is
         address token,
         uint256 amount
     ) internal {
-        uint256 memberUnits =
-            bank.getPriorAmount(unitHolderAddr, UNITS, blockNumber);
-        require(memberUnits != 0, "not enough units");
+        uint256 memberTokens =
+            DaoHelper.priorMemberTokens(bank, unitHolderAddr, blockNumber);
+        bank.getPriorAmount(unitHolderAddr, UNITS, blockNumber);
+        require(memberTokens != 0, "not enough tokens");
         // Distributes the funds to 1 unit holder only
         bank.internalTransfer(ESCROW, unitHolderAddr, token, amount);
     }
@@ -328,7 +335,7 @@ contract DistributeContract is
         address token,
         uint256 amount
     ) internal {
-        uint256 totalUnits = bank.getPriorAmount(TOTAL, UNITS, blockNumber);
+        uint256 totalUnits = DaoHelper.priorTotalTokens(bank, blockNumber);
         // Distributes the funds to all unit holders of the DAO and ignores non-active members.
         for (uint256 i = currentIndex; i < maxIndex; i++) {
             address memberAddr = dao.getMemberAddress(i);

@@ -1,8 +1,9 @@
 pragma solidity ^0.8.0;
-
 // SPDX-License-Identifier: MIT
-
+import "../../core/DaoConstants.sol";
 import "../../core/DaoRegistry.sol";
+import "../../core/CloneFactory.sol";
+import "./ERC1155TokenExtension.sol";
 
 /**
 MIT License
@@ -28,26 +29,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-interface IManaging {
-    enum UpdateType {UNKNOWN, ADAPTER, EXTENSION}
+contract ERC1155TokenExtensionFactory is CloneFactory, DaoConstants {
+    address public identityAddress;
 
-    struct ProposalDetails {
-        bytes32 adapterOrExtensionId;
-        address adapterOrExtensionAddr;
-        UpdateType updateType;
-        uint128 flags;
-        bytes32[] keys;
-        uint256[] values;
-        address[] extensionAddresses;
-        uint128[] extensionAclFlags;
+    event ERC1155CollectionCreated(address nftCollAddress);
+
+    constructor(address _identityAddress) {
+        identityAddress = _identityAddress;
     }
 
-    function submitProposal(
-        DaoRegistry dao,
-        bytes32 proposalId,
-        ProposalDetails calldata proposal,
-        bytes calldata data
-    ) external;
-
-    function processProposal(DaoRegistry dao, bytes32 proposalId) external;
+    /**
+     * @notice Create and initialize a new Standard NFT Extension which is based on ERC1155
+     */
+    function createERC1155Collection() external {
+        ERC1155TokenExtension extension =
+            ERC1155TokenExtension(_createClone(identityAddress));
+        emit ERC1155CollectionCreated(address(extension));
+    }
 }

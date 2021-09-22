@@ -7,6 +7,7 @@ import "../core/DaoRegistry.sol";
 import "../extensions/bank/Bank.sol";
 import "./interfaces/IRagequit.sol";
 import "../helpers/FairShareHelper.sol";
+import "../helpers/DaoHelper.sol";
 import "../guards/AdapterGuard.sol";
 
 /**
@@ -38,6 +39,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
      * @notice Event emitted when a member of the DAO executes a ragequit with all or parts of the member's units/loot.
      */
     event MemberRagequit(
+        address daoAddress,
         address memberAddr,
         uint256 burnedUnits,
         uint256 burnedLoot,
@@ -91,7 +93,14 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
         );
 
         // Start the ragequit process by updating the member's internal account balances.
-        _prepareRagequit(memberAddr, unitsToBurn, lootToBurn, tokens, bank);
+        _prepareRagequit(
+            dao,
+            memberAddr,
+            unitsToBurn,
+            lootToBurn,
+            tokens,
+            bank
+        );
     }
 
     /**
@@ -103,6 +112,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
      * @param bank The bank extension.
      */
     function _prepareRagequit(
+        DaoRegistry dao,
         address memberAddr,
         uint256 unitsToBurn,
         uint256 lootToBurn,
@@ -112,8 +122,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
         // Calculates the total units, loot and locked loot before any internal transfers
         // it considers the locked loot to be able to calculate the fair amount to ragequit,
         // but locked loot can not be burned.
-        uint256 initialTotalUnitsAndLoot =
-            bank.balanceOf(TOTAL, UNITS) + bank.balanceOf(TOTAL, LOOT);
+        uint256 totalTokens = DaoHelper.totalTokens(bank);
 
         // Burns / subtracts from member's balance the number of units to burn.
         bank.subtractFromBalance(memberAddr, UNITS, unitsToBurn);
@@ -122,10 +131,11 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
 
         // Completes the ragequit process by updating the GUILD internal balance based on each provided token.
         _burnUnits(
+            address(dao),
             memberAddr,
             unitsToBurn,
             lootToBurn,
-            initialTotalUnitsAndLoot,
+            totalTokens,
             tokens,
             bank
         );
@@ -142,6 +152,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
      * @param bank The bank extension.
      */
     function _burnUnits(
+        address daoAddress,
         address memberAddr,
         uint256 unitsToBurn,
         uint256 lootToBurn,
@@ -191,6 +202,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
 
         // Once the units and loot were burned, and the transfers completed, emit an event to indicate a successfull operation.
         emit MemberRagequit(
+            daoAddress,
             memberAddr,
             unitsToBurn,
             lootToBurn,

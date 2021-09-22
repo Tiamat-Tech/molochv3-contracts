@@ -111,12 +111,13 @@ generated/
 coverage
 coverage.json
 coverageEnv
+contracts-backup
 .coverage_artifacts
 .coverage_contracts
 
 .env
 
-docker/data
+subgraph/docker/data
 artifacts
 cache
 typechain

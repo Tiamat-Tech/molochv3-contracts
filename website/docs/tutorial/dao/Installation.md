@@ -16,10 +16,47 @@ sidebar_position: 2
 
 The easiest way to start with TributeDAO Framework is to use the command line tool to clone the Github repository and install all the project dependencies.
 
-Clone and access the Github repo:
+We will use several projects to build and run the TributeDAO in your local environment, so please try to keep the following folder structure:
+
+```
+tribute-tutorial
+│
+└───tribute-contracts (branch v1.0.0)
+│   │   .env
+│   │   ...
+|   |
+│   └───subgraph (branch v1.1.0)
+│       │   .env
+│       │   ...
+│
+└───tribute-ui
+│     │   .env
+│     │   ...
+│
+└───snapshot-hub (branch erc-712)
+    │   .env
+    │   docker-compose.yml
+    │   ...
+```
+
+Create and access the tutorial folder:
 
 ```bash
-git clone git@github.com:openlawteam/tribute-contracts.git && cd tribute-contracts
+mkdir tribute-tutorial && cd tribute-tutorial
+```
+
+Clone and access the _tribute-contracts_ Github repo:
+
+```bash
+git clone https://github.com/openlawteam/tribute-contracts.git && cd tribute-contracts
+```
+
+:::caution
+Make sure you checkout the tag [v1.0.0](https://github.com/openlawteam/tribute-contracts/releases/tag/v1.0.0) which is the version that contains the contracts that work with [TributeUI](https://github.com/openlawteam/tribute-ui).
+:::
+
+```bash
+git checkout tags/v1.0.0 -b branch-v1.0.0
 ```
 
 Install all the project dependencies and compile the smart contracts:

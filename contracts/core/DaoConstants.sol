@@ -40,6 +40,7 @@ abstract contract DaoConstants {
     bytes32 internal constant CONFIGURATION = keccak256("configuration");
     bytes32 internal constant DISTRIBUTE = keccak256("distribute");
     bytes32 internal constant TRIBUTE_NFT = keccak256("tribute-nft");
+    bytes32 internal constant ERC1155_ADAPT = keccak256("erc1155-adpt");
 
     // Extensions
     bytes32 internal constant BANK = keccak256("bank");
@@ -47,13 +48,16 @@ abstract contract DaoConstants {
     bytes32 internal constant NFT = keccak256("nft");
     bytes32 internal constant ERC20_EXT = keccak256("erc20-ext");
     bytes32 internal constant EXECUTOR_EXT = keccak256("executor-ext");
+    bytes32 internal constant ERC1155_EXT = keccak256("erc1155-ext");
 
     // Reserved Addresses
     address internal constant GUILD = address(0xdead);
-    address internal constant TOTAL = address(0xbabe);
     address internal constant ESCROW = address(0x4bec);
+    address internal constant TOTAL = address(0xbabe);
     address internal constant UNITS = address(0xFF1CE);
+    address internal constant LOCKED_UNITS = address(0xFFF1CE);
     address internal constant LOOT = address(0xB105F00D);
+    address internal constant LOCKED_LOOT = address(0xBB105F00D);
     address internal constant ETH_TOKEN = address(0x0);
     address internal constant MEMBER_COUNT = address(0xDECAFBAD);
 
