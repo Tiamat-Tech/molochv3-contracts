@@ -24,16 +24,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
-const { sha3, soliditySha3 } = require("../../utils/ContractUtil.js");
+const { expect } = require("chai");
+const {
+  sha3,
+  soliditySha3,
+  ZERO_ADDRESS,
+} = require("../../utils/contract-util");
 
 const {
   deployDefaultDao,
   takeChainSnapshot,
   revertChainSnapshot,
-  expectRevert,
-  accounts,
-  expect,
-} = require("../../utils/OZTestUtil.js");
+  getAccounts,
+  ERC1271Extension,
+} = require("../../utils/hardhat-test-util");
 
 const arbitrarySignature =
   "0xc531a1d9046945d3732c73d049da2810470c3b0663788dca9e9f329a35c8a0d56add77ed5ea610b36140641860d13849abab295ca46c350f50731843c6517eee1c";
@@ -46,15 +50,20 @@ const arbitraryMsgHash =
 const magicValue = "0x1626ba7e";
 
 describe("Extension - ERC1271", () => {
-  const daoOwner = accounts[0];
+  let accounts, daoOwner, creator;
 
   before("deploy dao", async () => {
-    const { dao, adapters, extensions } = await deployDefaultDao({
+    accounts = await getAccounts();
+    daoOwner = accounts[0];
+    creator = accounts[1];
+
+    const { dao, adapters, factories, extensions } = await deployDefaultDao({
       owner: daoOwner,
     });
     this.dao = dao;
     this.adapters = adapters;
     this.extensions = extensions;
+    this.factories = factories;
   });
 
   beforeEach(async () => {
@@ -65,29 +74,76 @@ describe("Extension - ERC1271", () => {
     await revertChainSnapshot(this.snapshotId);
   });
 
+  describe("Factory", async () => {
+    it("should be possible to create an extension using the factory", async () => {
+      const { logs } = await this.factories.erc1271ExtFactory.create(
+        this.dao.address
+      );
+      const log = logs[0];
+      expect(log.event).to.be.equal("ERC1271Created");
+      expect(log.args[0]).to.be.equal(this.dao.address);
+      expect(log.args[1]).to.not.be.equal(ZERO_ADDRESS);
+    });
+
+    it("should be possible to get an extension address by dao", async () => {
+      await this.factories.erc1271ExtFactory.create(this.dao.address);
+      const extAddress =
+        await this.factories.erc1271ExtFactory.getExtensionAddress(
+          this.dao.address
+        );
+      expect(extAddress).to.not.be.equal(ZERO_ADDRESS);
+    });
+
+    it("should return zero address if there is no extension address by dao", async () => {
+      const daoAddress = accounts[2];
+      const extAddress =
+        await this.factories.erc1271ExtFactory.getExtensionAddress(daoAddress);
+      expect(extAddress).to.be.equal(ZERO_ADDRESS);
+    });
+
+    it("should not be possible to create an extension using a zero address dao", async () => {
+      await expect(this.factories.erc1271ExtFactory.create(ZERO_ADDRESS)).to.be
+        .reverted;
+    });
+  });
+
+  describe("Access Control", async () => {
+    it("should not be possible to call initialize more than once", async () => {
+      const extension = this.extensions.erc1271Ext;
+      await expect(
+        extension.initialize(this.dao.address, daoOwner)
+      ).to.be.revertedWith("already initialized");
+    });
+
+    it("should be possible to call initialize with a non member", async () => {
+      const extension = await ERC1271Extension.new();
+      await extension.initialize(this.dao.address, creator);
+      expect(await extension.initialized()).to.be.true;
+    });
+
+    it("should not be possible to submit a signature without the SIGN permission", async () => {
+      const erc1271Extension = this.extensions.erc1271Ext;
+      await expect(
+        erc1271Extension.sign(
+          this.dao.address,
+          arbitraryMsgHash,
+          arbitrarySignatureHash,
+          magicValue
+        )
+      ).to.be.revertedWith("erc1271::accessDenied");
+    });
+  });
+
   it("should be possible to create a dao with an erc1271 extension pre-configured", async () => {
     const dao = this.dao;
     const erc1271Address = await dao.getExtensionAddress(sha3("erc1271"));
     expect(erc1271Address).to.not.be.null;
   });
 
-  it("should not be possible to submit a signature without the SIGN permission", async () => {
-    const erc1271Extension = this.extensions.erc1271;
-    await expectRevert(
-      erc1271Extension.sign(
-        arbitraryMsgHash,
-        arbitrarySignatureHash,
-        magicValue
-      ),
-      "erc1271::accessDenied"
-    );
-  });
-
   it("should revert for invalid signatures", async () => {
-    const erc1271Extension = this.extensions.erc1271;
-    await expectRevert(
-      erc1271Extension.isValidSignature(arbitraryMsgHash, arbitrarySignature),
-      "erc1271::invalid signature"
-    );
+    const erc1271Extension = this.extensions.erc1271Ext;
+    await expect(
+      erc1271Extension.isValidSignature(arbitraryMsgHash, arbitrarySignature)
+    ).to.be.revertedWith("erc1271::invalid signature");
   });
 });

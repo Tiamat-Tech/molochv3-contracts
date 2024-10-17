@@ -1,10 +1,9 @@
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 // SPDX-License-Identifier: MIT
 
 import "../core/DaoRegistry.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /**
 MIT License
@@ -39,15 +38,14 @@ abstract contract Signatures {
 
     function hashMessage(
         DaoRegistry dao,
-        uint256 chainId,
         address actionId,
         bytes32 message
-    ) public pure returns (bytes32) {
+    ) public view returns (bytes32) {
         return
             keccak256(
                 abi.encodePacked(
                     "\x19\x01",
-                    domainSeparator(dao, chainId, actionId),
+                    domainSeparator(dao, actionId),
                     message
                 )
             );
@@ -55,27 +53,26 @@ abstract contract Signatures {
 
     function domainSeparator(
         DaoRegistry dao,
-        uint256 chainId,
         address actionId
-    ) public pure returns (bytes32) {
+    ) public view returns (bytes32) {
         return
             keccak256(
                 abi.encode(
                     EIP712_DOMAIN_TYPEHASH,
                     keccak256("Snapshot Message"), // string name
                     keccak256("4"), // string version
-                    chainId, // uint256 chainId
+                    block.chainid, // uint256 chainId
                     address(dao), // address verifyingContract,
                     actionId
                 )
             );
     }
 
-    function recover(bytes32 hash, bytes memory sig)
-        public
-        pure
-        returns (address)
-    {
-        return ECDSA.recover(hash, sig);
+    function isValidSignature(
+        address signer,
+        bytes32 hash,
+        bytes memory sig
+    ) external view returns (bool) {
+        return SignatureChecker.isValidSignatureNow(signer, hash, sig);
     }
 }

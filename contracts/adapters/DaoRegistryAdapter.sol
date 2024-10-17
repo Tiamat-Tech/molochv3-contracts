@@ -2,7 +2,6 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
 import "../extensions/bank/Bank.sol";
 import "../guards/MemberGuard.sol";
@@ -33,24 +32,25 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract DaoRegistryAdapterContract is DaoConstants, MemberGuard, AdapterGuard {
-    /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
-
+contract DaoRegistryAdapterContract is MemberGuard, AdapterGuard {
     /**
      * @notice Allows the member/advisor to update their delegate key
      * @param dao The DAO address.
      * @param delegateKey the new delegate key.
      */
-    function updateDelegateKey(DaoRegistry dao, address delegateKey)
-        external
-        reentrancyGuard(dao)
-        onlyMember(dao)
-    {
-        dao.updateDelegateKey(msg.sender, delegateKey);
+    function updateDelegateKey(
+        DaoRegistry dao,
+        address delegateKey
+    ) external reentrancyGuard(dao) {
+        address dk = dao.getCurrentDelegateKey(msg.sender);
+        if (dk != msg.sender && dao.isMember(dk)) {
+            dao.updateDelegateKey(msg.sender, delegateKey);
+        } else {
+            require(dao.isMember(msg.sender), "only member");
+            dao.updateDelegateKey(
+                DaoHelper.msgSender(dao, msg.sender),
+                delegateKey
+            );
+        }
     }
 }

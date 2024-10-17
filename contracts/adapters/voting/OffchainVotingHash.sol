@@ -1,18 +1,16 @@
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 // SPDX-License-Identifier: MIT
-
 import "../../core/DaoRegistry.sol";
 import "../../extensions/bank/Bank.sol";
-import "../../core/DaoConstants.sol";
-import "../../guards/MemberGuard.sol";
-import "../../guards/AdapterGuard.sol";
+import "../../extensions/token/erc20/ERC20TokenExtension.sol";
 import "../../utils/Signatures.sol";
 import "../interfaces/IVoting.sol";
 import "./Voting.sol";
 import "./KickBadReporterAdapter.sol";
 import "./SnapshotProposalContract.sol";
+import "../../helpers/DaoHelper.sol";
+import "../../helpers/GovernanceHelper.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
@@ -41,7 +39,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract OffchainVotingHashContract is DaoConstants {
+contract OffchainVotingHashContract {
     string public constant VOTE_RESULT_NODE_TYPE =
         "Message(uint64 timestamp,uint88 nbYes,uint88 nbNo,uint32 index,uint32 choice,bytes32 proposalId)";
     string public constant VOTE_RESULT_ROOT_TYPE = "Message(bytes32 root)";
@@ -85,7 +83,7 @@ contract OffchainVotingHashContract is DaoConstants {
         DaoRegistry dao,
         address actionId,
         bytes32 resultRoot
-    ) public view returns (bytes32) {
+    ) external view returns (bytes32) {
         return
             keccak256(
                 abi.encodePacked(
@@ -96,11 +94,9 @@ contract OffchainVotingHashContract is DaoConstants {
             );
     }
 
-    function hashVotingResultNode(VoteResultNode memory node)
-        public
-        pure
-        returns (bytes32)
-    {
+    function hashVotingResultNode(
+        VoteResultNode memory node
+    ) public pure returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -119,7 +115,7 @@ contract OffchainVotingHashContract is DaoConstants {
         DaoRegistry dao,
         address actionId,
         VoteResultNode memory node
-    ) public view returns (bytes32) {
+    ) external view returns (bytes32) {
         return
             keccak256(
                 abi.encodePacked(
@@ -139,24 +135,21 @@ contract OffchainVotingHashContract is DaoConstants {
         uint32 choiceIdx,
         bytes memory sig
     ) public view returns (bool) {
-        bytes32 voteHash =
-            snapshotContract.hashVote(
-                dao,
-                actionId,
-                SnapshotProposalContract.VoteMessage(
-                    timestamp,
-                    SnapshotProposalContract.VotePayload(choiceIdx, proposalId)
-                )
-            );
+        bytes32 voteHash = snapshotContract.hashVote(
+            dao,
+            actionId,
+            SnapshotProposalContract.VoteMessage(
+                timestamp,
+                SnapshotProposalContract.VotePayload(choiceIdx, proposalId)
+            )
+        );
 
         return SignatureChecker.isValidSignatureNow(voter, voteHash, sig);
     }
 
-    function stringToUint(string memory s)
-        public
-        pure
-        returns (bool success, uint256 result)
-    {
+    function stringToUint(
+        string memory s
+    ) external pure returns (bool success, uint256 result) {
         bytes memory b = bytes(s);
         result = 0;
         success = false;
@@ -179,11 +172,18 @@ contract OffchainVotingHashContract is DaoConstants {
         OffchainVotingHashContract.VoteResultNode memory node,
         uint256 snapshot,
         VoteStepParams memory params
-    ) public view returns (bool) {
-        address account = dao.getMemberAddress(node.index);
-        address voter = dao.getPriorDelegateKey(account, snapshot);
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-        uint256 weight = bank.getPriorAmount(account, UNITS, snapshot);
+    ) external view returns (bool) {
+        require(node.index > 0, "invalid node index");
+        address voter = dao.getPriorDelegateKey(
+            dao.getMemberAddress(node.index - 1),
+            snapshot
+        );
+        uint256 weight = GovernanceHelper.getVotingWeight(
+            dao,
+            voter,
+            node.proposalId,
+            snapshot
+        );
 
         if (node.choice == 0) {
             if (params.previousYes != node.nbYes) {

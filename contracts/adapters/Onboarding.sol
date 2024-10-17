@@ -3,16 +3,15 @@ pragma solidity ^0.8.0;
 // SPDX-License-Identifier: MIT
 
 import "./interfaces/IOnboarding.sol";
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
-import "../utils/PotentialNewMember.sol";
 import "../extensions/bank/Bank.sol";
 import "../adapters/interfaces/IVoting.sol";
-import "../guards/MemberGuard.sol";
+import "../adapters/modifiers/Reimbursable.sol";
 import "../guards/AdapterGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "../helpers/DaoHelper.sol";
 
 /**
 MIT License
@@ -38,13 +37,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract OnboardingContract is
-    IOnboarding,
-    DaoConstants,
-    PotentialNewMember,
-    MemberGuard,
-    AdapterGuard
-{
+contract OnboardingContract is IOnboarding, AdapterGuard, Reimbursable {
     using Address for address payable;
     using SafeERC20 for IERC20;
 
@@ -72,9 +65,10 @@ contract OnboardingContract is
     }
 
     // proposals per dao
-    mapping(address => mapping(bytes32 => ProposalDetails)) public proposals;
+    mapping(DaoRegistry => mapping(bytes32 => ProposalDetails))
+        public proposals;
     // minted units per dao, per token, per applicant
-    mapping(address => mapping(address => mapping(address => uint88)))
+    mapping(DaoRegistry => mapping(address => mapping(address => uint88)))
         public units;
 
     /**
@@ -125,9 +119,11 @@ contract OnboardingContract is
             tokenAddr
         );
 
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-        bank.registerPotentialNewInternalToken(unitsToMint);
-        bank.registerPotentialNewToken(tokenAddr);
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
+        bank.registerPotentialNewInternalToken(dao, unitsToMint);
+        bank.registerPotentialNewToken(dao, tokenAddr);
     }
 
     /**
@@ -138,6 +134,7 @@ contract OnboardingContract is
      * @param tokenAmount The amount of token to mint.
      * @param data Additional proposal information.
      */
+    // slither-disable-next-line reentrancy-benign
     function submitProposal(
         DaoRegistry dao,
         bytes32 proposalId,
@@ -145,20 +142,21 @@ contract OnboardingContract is
         address tokenToMint,
         uint256 tokenAmount,
         bytes memory data
-    ) public override reentrancyGuard(dao) {
+    ) external override reimbursable(dao) {
         require(
-            isNotReservedAddress(applicant),
+            DaoHelper.isNotReservedAddress(applicant),
             "applicant is reserved address"
         );
 
-        potentialNewMember(
+        DaoHelper.potentialNewMember(
             applicant,
             dao,
-            BankExtension(dao.getExtensionAddress(BANK))
+            BankExtension(dao.getExtensionAddress(DaoHelper.BANK))
         );
 
-        address tokenAddr =
-            dao.getAddressConfiguration(_configKey(tokenToMint, TokenAddr));
+        address tokenAddr = dao.getAddressConfiguration(
+            _configKey(tokenToMint, TokenAddr)
+        );
 
         _submitMembershipProposal(
             dao,
@@ -176,13 +174,12 @@ contract OnboardingContract is
      * @notice Once the vote on a proposal is finished, it is time to process it. Anybody can call this function.
      * @param proposalId The proposal id to be processed. It needs to exist in the DAO Registry.
      */
-    function processProposal(DaoRegistry dao, bytes32 proposalId)
-        external
-        payable
-        override
-        reentrancyGuard(dao)
-    {
-        ProposalDetails storage proposal = proposals[address(dao)][proposalId];
+    // slither-disable-next-line reentrancy-benign
+    function processProposal(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external payable override reimbursable(dao) {
+        ProposalDetails storage proposal = proposals[dao][proposalId];
         require(proposal.id == proposalId, "proposal does not exist");
         require(
             !dao.getProposalFlag(
@@ -195,41 +192,57 @@ contract OnboardingContract is
         IVoting votingContract = IVoting(dao.votingAdapter(proposalId));
         require(address(votingContract) != address(0), "adapter not found");
 
-        IVoting.VotingState voteResult =
-            votingContract.voteResult(dao, proposalId);
+        IVoting.VotingState voteResult = votingContract.voteResult(
+            dao,
+            proposalId
+        );
 
         dao.processProposal(proposalId);
 
-        address token = proposal.token;
-        uint256 amount = proposal.amount;
         if (voteResult == IVoting.VotingState.PASS) {
             address unitsToMint = proposal.unitsToMint;
             uint256 unitsRequested = proposal.unitsRequested;
             address applicant = proposal.applicant;
-            BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+            BankExtension bank = BankExtension(
+                dao.getExtensionAddress(DaoHelper.BANK)
+            );
             require(
                 bank.isInternalToken(unitsToMint),
                 "it can only mint units"
             );
 
-            bank.addToBalance(applicant, unitsToMint, unitsRequested);
+            bank.addToBalance(dao, applicant, unitsToMint, unitsRequested);
 
-            address daoAddress = address(dao);
-            if (token == ETH_TOKEN) {
-                bank.addToBalance{value: amount}(GUILD, token, amount);
-                if (msg.value > amount) {
-                    payable(msg.sender).sendValue(msg.value - amount);
+            if (proposal.token == DaoHelper.ETH_TOKEN) {
+                // This call sends ETH directly to the GUILD bank, and the address can't be changed since
+                // it is defined in the DaoHelper as a constant.
+                //slither-disable-next-line arbitrary-send
+                bank.addToBalance{value: proposal.amount}(
+                    dao,
+                    DaoHelper.GUILD,
+                    proposal.token,
+                    proposal.amount
+                );
+                if (msg.value > proposal.amount) {
+                    payable(msg.sender).sendValue(msg.value - proposal.amount);
                 }
             } else {
-                bank.addToBalance(GUILD, token, amount);
-                IERC20 erc20 = IERC20(token);
-                erc20.safeTransferFrom(msg.sender, address(bank), amount);
+                bank.addToBalance(
+                    dao,
+                    DaoHelper.GUILD,
+                    proposal.token,
+                    proposal.amount
+                );
+                IERC20(proposal.token).safeTransferFrom(
+                    msg.sender,
+                    address(bank),
+                    proposal.amount
+                );
             }
 
-            uint88 totalUnits =
-                _getUnits(daoAddress, unitsToMint, applicant) +
-                    proposal.unitsRequested;
-            units[daoAddress][unitsToMint][applicant] = totalUnits;
+            uint88 totalUnits = _getUnits(dao, unitsToMint, applicant) +
+                proposal.unitsRequested;
+            units[dao][unitsToMint][applicant] = totalUnits;
         } else if (
             voteResult == IVoting.VotingState.NOT_PASS ||
             voteResult == IVoting.VotingState.TIE
@@ -252,14 +265,15 @@ contract OnboardingContract is
         bytes32 proposalId,
         bytes memory data
     ) internal {
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
-        address sponsoredBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
+        IVoting votingContract = IVoting(
+            dao.getAdapterAddress(DaoHelper.VOTING)
+        );
+        address sponsoredBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
         dao.sponsorProposal(proposalId, sponsoredBy, address(votingContract));
         votingContract.startNewVotingForProposal(dao, proposalId, data);
     }
@@ -276,7 +290,7 @@ contract OnboardingContract is
         uint256 value,
         address token
     ) internal returns (uint160) {
-        OnboardingDetails memory details;
+        OnboardingDetails memory details = OnboardingDetails(0, 0, 0, 0, 0, 0);
         details.chunkSize = uint88(
             dao.getConfiguration(_configKey(tokenToMint, ChunkSize))
         );
@@ -294,7 +308,7 @@ contract OnboardingContract is
         details.unitsRequested = details.numberOfChunks * details.unitsPerChunk;
 
         details.totalUnits =
-            _getUnits(address(dao), token, applicant) +
+            _getUnits(dao, token, applicant) +
             details.unitsRequested;
 
         require(
@@ -303,8 +317,7 @@ contract OnboardingContract is
             "total units for this member must be lower than the maximum"
         );
 
-        dao.submitProposal(proposalId);
-        proposals[address(dao)][proposalId] = ProposalDetails(
+        proposals[dao][proposalId] = ProposalDetails(
             proposalId,
             tokenToMint,
             details.amount,
@@ -313,21 +326,23 @@ contract OnboardingContract is
             applicant
         );
 
+        dao.submitProposal(proposalId);
+
         return details.amount;
     }
 
     /**
      * @notice Gets the current number of units.
-     * @param daoAddress The DAO Address that contains the units.
+     * @param dao The DAO that contains the units.
      * @param token The Token Address in which the Unit were minted.
      * @param applicant The Applicant Address which holds the units.
      */
     function _getUnits(
-        address daoAddress,
+        DaoRegistry dao,
         address token,
         address applicant
     ) internal view returns (uint88) {
-        return units[daoAddress][token][applicant];
+        return units[dao][token][applicant];
     }
 
     /**
@@ -335,11 +350,10 @@ contract OnboardingContract is
      * @param tokenAddrToMint The address to encode.
      * @param key The key to encode.
      */
-    function _configKey(address tokenAddrToMint, bytes32 key)
-        internal
-        pure
-        returns (bytes32)
-    {
+    function _configKey(
+        address tokenAddrToMint,
+        bytes32 key
+    ) internal pure returns (bytes32) {
         return keccak256(abi.encode(tokenAddrToMint, key));
     }
 }

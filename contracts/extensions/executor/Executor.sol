@@ -2,10 +2,8 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../../core/DaoConstants.sol";
 import "../../core/DaoRegistry.sol";
 import "../IExtension.sol";
-import "../../guards/AdapterGuard.sol";
 
 /**
 MIT License
@@ -40,28 +38,31 @@ SOFTWARE.
  * This contract was based on the OpenZeppelin Proxy contract:
  * https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/proxy/Proxy.sol
  */
-contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
+contract ExecutorExtension is IExtension {
     using Address for address payable;
 
     bool public initialized = false; // internally tracks deployment under eip-1167 proxy pattern
     DaoRegistry public dao;
 
-    enum AclFlag {EXECUTE}
+    enum AclFlag {
+        EXECUTE
+    }
 
     /// @notice Clonable contract must have an empty constructor
     constructor() {}
 
     modifier hasExtensionAccess(AclFlag flag) {
         require(
-            address(this) == msg.sender ||
+            (address(this) == msg.sender ||
                 address(dao) == msg.sender ||
-                dao.state() == DaoRegistry.DaoState.CREATION ||
+                !initialized ||
+                DaoHelper.isInCreationModeAndHasAccess(dao) ||
                 dao.hasAdapterAccessToExtension(
                     msg.sender,
                     address(this),
                     uint8(flag)
-                ),
-            "executor::accessDenied"
+                )),
+            "executorExt::accessDenied"
         );
         _;
     }
@@ -69,11 +70,10 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
     /**
      * @notice Initialises the Executor extension to be associated with a DAO
      * @dev Can only be called once
-     * @param creator The DAO's creator, who will be an initial member
+     * @param _dao The dao address that will be associated with the new extension.
      */
-    function initialize(DaoRegistry _dao, address creator) external override {
-        require(!initialized, "executor::already initialized");
-        require(_dao.isMember(creator), "executor::not member");
+    function initialize(DaoRegistry _dao, address) external override {
+        require(!initialized, "already initialized");
         dao = _dao;
         initialized = true;
     }
@@ -83,19 +83,25 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
      *
      * This function does not return to its internall call site, it will return directly to the external caller.
      */
-    function _delegate(address implementation)
-        internal
-        virtual
-        hasExtensionAccess(AclFlag.EXECUTE)
-    {
+    function _delegate(
+        address implementation
+    ) internal virtual hasExtensionAccess(AclFlag.EXECUTE) {
         require(
-            isNotZeroAddress(implementation),
-            "implementation address can not be zero"
+            DaoHelper.isNotZeroAddress(implementation),
+            "executorExt: impl address can not be zero"
         );
         require(
-            isNotReservedAddress(implementation),
-            "implementation address can not be reserved"
+            DaoHelper.isNotReservedAddress(implementation),
+            "executorExt: impl address can not be reserved"
         );
+
+        address daoAddr;
+        bytes memory data = msg.data;
+        assembly {
+            daoAddr := mload(add(data, 36))
+        }
+
+        require(daoAddr == address(dao), "wrong dao!");
 
         // solhint-disable-next-line no-inline-assembly
         assembly {
@@ -103,7 +109,6 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
             // block because it will not return to Solidity code. We overwrite the
             // Solidity scratch pad at memory position 0.
             calldatacopy(0, 0, calldatasize())
-
             // Call the implementation.
             // out and outsize are 0 because we don't know the size yet.
             let result := delegatecall(
@@ -119,13 +124,13 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
             returndatacopy(0, 0, returndatasize())
 
             switch result
-                // delegatecall returns 0 on error.
-                case 0 {
-                    revert(0, returndatasize())
-                }
-                default {
-                    return(0, returndatasize())
-                }
+            // delegatecall returns 0 on error.
+            case 0 {
+                revert(0, returndatasize())
+            }
+            default {
+                return(0, returndatasize())
+            }
         }
     }
 
@@ -142,6 +147,8 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
      * @dev Fallback function that delegates calls to the sender address. Will run if no other
      * function in the contract matches the call data.
      */
+    // Only senders with the EXECUTE ACL Flag enabled is allowed to send eth.
+    //slither-disable-next-line locked-ether
     fallback() external payable {
         _fallback();
     }
@@ -150,6 +157,8 @@ contract ExecutorExtension is DaoConstants, AdapterGuard, IExtension {
      * @dev Fallback function that delegates calls to the address returned by `_implementation()`. Will run if call data
      * is empty.
      */
+    // Only senders with the EXECUTE ACL Flag enabled is allowed to send eth.
+    //slither-disable-next-line locked-ether
     receive() external payable {
         _fallback();
     }

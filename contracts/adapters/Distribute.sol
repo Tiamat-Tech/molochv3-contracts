@@ -2,13 +2,13 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
-import "../guards/MemberGuard.sol";
 import "../guards/AdapterGuard.sol";
+import "./modifiers/Reimbursable.sol";
 import "../adapters/interfaces/IVoting.sol";
 import "../adapters/interfaces/IDistribute.sol";
 import "../helpers/FairShareHelper.sol";
+import "../helpers/DaoHelper.sol";
 import "../extensions/bank/Bank.sol";
 
 /**
@@ -35,18 +35,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract DistributeContract is
-    IDistribute,
-    DaoConstants,
-    MemberGuard,
-    AdapterGuard
-{
+contract DistributeContract is IDistribute, AdapterGuard, Reimbursable {
     // Event to indicate the distribution process has been completed
     // if the unitHolder address is 0x0, then the amount were distributed to all members of the DAO.
-    event Distributed(address token, uint256 amount, address unitHolder);
+    event Distributed(
+        address daoAddress,
+        address token,
+        uint256 amount,
+        address unitHolder
+    );
 
     // The distribution status
-    enum DistributionStatus {NOT_STARTED, IN_PROGRESS, DONE, FAILED}
+    enum DistributionStatus {
+        NOT_STARTED,
+        IN_PROGRESS,
+        DONE,
+        FAILED
+    }
 
     // State of the distribution proposal
     struct Distribution {
@@ -71,13 +76,6 @@ contract DistributeContract is
     mapping(address => bytes32) public ongoingDistributions;
 
     /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
-
-    /**
      * @notice Creates a distribution proposal for one or all members of the DAO, opens it for voting, and sponsors it.
      * @dev Only tokens that are allowed by the Bank are accepted.
      * @dev If the unitHolderAddr is 0x0, then the funds will be distributed to all members of the DAO.
@@ -90,6 +88,7 @@ contract DistributeContract is
      * @param amount The amount to distribute.
      * @param data Additional information related to the distribution proposal.
      */
+    // slither-disable-next-line reentrancy-benign
     function submitProposal(
         DaoRegistry dao,
         bytes32 proposalId,
@@ -97,52 +96,31 @@ contract DistributeContract is
         address token,
         uint256 amount,
         bytes calldata data
-    ) external override reentrancyGuard(dao) {
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
-        address submittedBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
+    ) external override reimbursable(dao) {
+        IVoting votingContract = IVoting(
+            dao.getAdapterAddress(DaoHelper.VOTING)
+        );
+        address submittedBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
 
         require(amount > 0, "invalid amount");
 
-        _submitProposal(
-            dao,
-            proposalId,
-            unitHolderAddr,
-            token,
-            amount,
-            data,
-            submittedBy
-        );
-    }
-
-    /**
-     * @notice Creates the proposal, starts the voting process and sponsors the proposal.
-     * @dev If the unit holder address was provided in the params, the unit holder must have enough units to receive the funds.
-     */
-    function _submitProposal(
-        DaoRegistry dao,
-        bytes32 proposalId,
-        address unitHolderAddr,
-        address token,
-        uint256 amount,
-        bytes calldata data,
-        address submittedBy
-    ) internal onlyMember2(dao, submittedBy) {
         // Creates the distribution proposal.
         dao.submitProposal(proposalId);
 
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
         require(bank.isTokenAllowed(token), "token not allowed");
 
         // Only check the number of units if there is a valid unit holder address.
         if (unitHolderAddr != address(0x0)) {
             // Gets the number of units of the member
-            uint256 units = bank.balanceOf(unitHolderAddr, UNITS);
+            uint256 units = bank.balanceOf(unitHolderAddr, DaoHelper.UNITS);
             // Checks if the member has enough units to reveice the funds.
             require(units > 0, "not enough units");
         }
@@ -158,7 +136,6 @@ contract DistributeContract is
         );
 
         // Starts the voting process for the proposal.
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
         votingContract.startNewVotingForProposal(dao, proposalId, data);
 
         // Sponsors the proposal.
@@ -169,21 +146,24 @@ contract DistributeContract is
      * @notice Process the distribution proposal, calculates the fair amount of funds to distribute to the members based on the units holdings.
      * @dev A distribution proposal proposal must be in progress.
      * @dev Only one proposal per DAO can be executed at time.
-     * @dev Only active members can reveice funds.
+     * @dev Only active members can receive funds.
      * @dev Only proposals that passed the voting can be set to In Progress status.
      * @param dao The dao address.
      * @param proposalId The distribution proposal id.
      */
-    function processProposal(DaoRegistry dao, bytes32 proposalId)
-        external
-        override
-        reentrancyGuard(dao)
-    {
+    // The function is protected against reentrancy with the reentrancyGuard
+    // Which prevents concurrent modifications in the DAO registry.
+    //slither-disable-next-line reentrancy-no-eth
+    function processProposal(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external override reimbursable(dao) {
         dao.processProposal(proposalId);
 
         // Checks if the proposal exists or is not in progress yet.
-        Distribution storage distribution =
-            distributions[address(dao)][proposalId];
+        Distribution storage distribution = distributions[address(dao)][
+            proposalId
+        ];
         require(
             distribution.status == DistributionStatus.NOT_STARTED,
             "proposal already completed or in progress"
@@ -202,23 +182,23 @@ contract DistributeContract is
         IVoting votingContract = IVoting(dao.votingAdapter(proposalId));
         require(address(votingContract) != address(0), "adapter not found");
 
-        IVoting.VotingState voteResult =
-            votingContract.voteResult(dao, proposalId);
+        IVoting.VotingState voteResult = votingContract.voteResult(
+            dao,
+            proposalId
+        );
         if (voteResult == IVoting.VotingState.PASS) {
             distribution.status = DistributionStatus.IN_PROGRESS;
             distribution.blockNumber = block.number;
             ongoingDistributions[address(dao)] = proposalId;
 
-            BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-            uint256 balance = bank.balanceOf(GUILD, distribution.token);
-            require(
-                balance - distribution.amount >= 0,
-                "not enough funds for the given token"
+            BankExtension bank = BankExtension(
+                dao.getExtensionAddress(DaoHelper.BANK)
             );
 
             bank.internalTransfer(
-                GUILD,
-                ESCROW,
+                dao,
+                DaoHelper.GUILD,
+                DaoHelper.ESCROW,
                 distribution.token,
                 distribution.amount
             );
@@ -241,19 +221,20 @@ contract DistributeContract is
      * @param dao The dao address.
      * @param toIndex The index to control the cached for-loop.
      */
-    function distribute(DaoRegistry dao, uint256 toIndex)
-        external
-        override
-        reentrancyGuard(dao)
-    {
+    // slither-disable-next-line reentrancy-benign
+    function distribute(
+        DaoRegistry dao,
+        uint256 toIndex
+    ) external override reimbursable(dao) {
         // Checks if the proposal does not exist or is not completed yet
         bytes32 ongoingProposalId = ongoingDistributions[address(dao)];
-        Distribution storage distribution =
-            distributions[address(dao)][ongoingProposalId];
+        Distribution storage distribution = distributions[address(dao)][
+            ongoingProposalId
+        ];
         uint256 blockNumber = distribution.blockNumber;
         require(
             distribution.status == DistributionStatus.IN_PROGRESS,
-            "distribution completed or does not exist"
+            "distrib completed or not exist"
         );
 
         // Check if the given index was already processed
@@ -264,19 +245,36 @@ contract DistributeContract is
         uint256 amount = distribution.amount;
 
         // Get the total number of units when the proposal was processed.
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
 
         address unitHolderAddr = distribution.unitHolderAddr;
         if (unitHolderAddr != address(0x0)) {
-            _distributeOne(bank, unitHolderAddr, blockNumber, token, amount);
             distribution.status = DistributionStatus.DONE;
-            emit Distributed(token, amount, unitHolderAddr);
+            _distributeOne(
+                dao,
+                bank,
+                unitHolderAddr,
+                blockNumber,
+                token,
+                amount
+            );
+            //slither-disable-next-line reentrancy-events
+            emit Distributed(address(dao), token, amount, unitHolderAddr);
         } else {
             // Set the max index supported which is based on the number of members
             uint256 nbMembers = dao.getNbMembers();
             uint256 maxIndex = toIndex;
             if (maxIndex > nbMembers) {
                 maxIndex = nbMembers;
+            }
+
+            distribution.currentIndex = maxIndex;
+            if (maxIndex == nbMembers) {
+                distribution.status = DistributionStatus.DONE;
+                //slither-disable-next-line reentrancy-events
+                emit Distributed(address(dao), token, amount, unitHolderAddr);
             }
 
             _distributeAll(
@@ -288,12 +286,6 @@ contract DistributeContract is
                 token,
                 amount
             );
-
-            distribution.currentIndex = maxIndex;
-            if (maxIndex == nbMembers) {
-                distribution.status = DistributionStatus.DONE;
-                emit Distributed(token, amount, unitHolderAddr);
-            }
         }
     }
 
@@ -302,17 +294,27 @@ contract DistributeContract is
      * @notice It is an internal transfer only that happens in the Bank extension.
      */
     function _distributeOne(
+        DaoRegistry dao,
         BankExtension bank,
         address unitHolderAddr,
         uint256 blockNumber,
         address token,
         uint256 amount
     ) internal {
-        uint256 memberUnits =
-            bank.getPriorAmount(unitHolderAddr, UNITS, blockNumber);
-        require(memberUnits != 0, "not enough units");
+        uint256 memberTokens = DaoHelper.priorMemberTokens(
+            bank,
+            unitHolderAddr,
+            blockNumber
+        );
+        require(memberTokens > 0, "not enough tokens");
         // Distributes the funds to 1 unit holder only
-        bank.internalTransfer(ESCROW, unitHolderAddr, token, amount);
+        bank.internalTransfer(
+            dao,
+            DaoHelper.ESCROW,
+            unitHolderAddr,
+            token,
+            amount
+        );
     }
 
     /**
@@ -328,19 +330,30 @@ contract DistributeContract is
         address token,
         uint256 amount
     ) internal {
-        uint256 totalUnits = bank.getPriorAmount(TOTAL, UNITS, blockNumber);
+        uint256 totalTokens = DaoHelper.priorTotalTokens(bank, blockNumber);
         // Distributes the funds to all unit holders of the DAO and ignores non-active members.
         for (uint256 i = currentIndex; i < maxIndex; i++) {
+            //slither-disable-next-line calls-loop
             address memberAddr = dao.getMemberAddress(i);
-            uint256 memberUnits =
-                bank.getPriorAmount(memberAddr, UNITS, blockNumber);
-            if (memberUnits > 0) {
-                uint256 amountToDistribute =
-                    FairShareHelper.calc(amount, memberUnits, totalUnits);
+            //slither-disable-next-line calls-loop
+            uint256 memberTokens = DaoHelper.priorMemberTokens(
+                bank,
+                memberAddr,
+                blockNumber
+            );
+            if (memberTokens > 0) {
+                //slither-disable-next-line calls-loop
+                uint256 amountToDistribute = FairShareHelper.calc(
+                    amount,
+                    memberTokens,
+                    totalTokens
+                );
 
                 if (amountToDistribute > 0) {
+                    //slither-disable-next-line calls-loop
                     bank.internalTransfer(
-                        ESCROW,
+                        dao,
+                        DaoHelper.ESCROW,
                         memberAddr,
                         token,
                         amountToDistribute

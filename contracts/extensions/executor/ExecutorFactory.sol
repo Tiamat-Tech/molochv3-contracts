@@ -1,12 +1,12 @@
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 // SPDX-License-Identifier: MIT
 
-import "../../core/DaoConstants.sol";
 import "../../core/DaoRegistry.sol";
 import "../../core/CloneFactory.sol";
+import "../IFactory.sol";
 import "./Executor.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
 MIT License
@@ -32,21 +32,45 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract ExecutorExtensionFactory is CloneFactory, DaoConstants {
+contract ExecutorExtensionFactory is IFactory, CloneFactory, ReentrancyGuard {
     address public identityAddress;
 
-    event ExecutorCreated(address executorAddress);
+    event ExecutorCreated(address daoAddress, address extensionAddress);
+
+    mapping(address => address) private _extensions;
 
     constructor(address _identityAddress) {
+        require(_identityAddress != address(0x0), "invalid addr");
         identityAddress = _identityAddress;
     }
 
     /**
-     * @notice Create and initialize a new Executor Extension
+     * @notice Creates a new extension using clone factory.
+     * @notice It can set additional arguments to the extension.
+     * @notice It initializes the extension and sets the DAO owner as the extension creator.
+     * @notice The safest way to read the new extension address is to read it from the event.
+     * @param dao The dao address that will be associated with the new extension.
      */
-    function create() external {
-        ExecutorExtension exec =
-            ExecutorExtension(_createClone(identityAddress));
-        emit ExecutorCreated(address(exec));
+    function create(DaoRegistry dao) external nonReentrant {
+        address daoAddress = address(dao);
+        require(daoAddress != address(0x0), "invalid dao addr");
+        address payable extensionAddr = _createClone(identityAddress);
+        _extensions[daoAddress] = extensionAddr;
+        ExecutorExtension extension = ExecutorExtension(extensionAddr);
+        extension.initialize(dao, address(0));
+        // slither-disable-next-line reentrancy-events
+        emit ExecutorCreated(daoAddress, address(extension));
+    }
+
+    /**
+     * @notice Returns the extension address created for that DAO, or 0x0... if it does not exist.
+     * @notice Do not rely on the result returned by this right after the new extension is cloned,
+     * because it is prone to front-running attacks. During the extension creation it is safer to
+     * read the new extension address from the event generated in the create call transaction.
+     */
+    function getExtensionAddress(
+        address dao
+    ) external view override returns (address) {
+        return _extensions[dao];
     }
 }

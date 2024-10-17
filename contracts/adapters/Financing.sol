@@ -3,12 +3,12 @@ pragma solidity ^0.8.0;
 // SPDX-License-Identifier: MIT
 
 import "./interfaces/IFinancing.sol";
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
 import "../extensions/bank/Bank.sol";
 import "../adapters/interfaces/IVoting.sol";
-import "../guards/MemberGuard.sol";
 import "../guards/AdapterGuard.sol";
+import "./modifiers/Reimbursable.sol";
+import "../helpers/DaoHelper.sol";
 
 /**
 MIT License
@@ -34,12 +34,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract FinancingContract is
-    IFinancing,
-    DaoConstants,
-    MemberGuard,
-    AdapterGuard
-{
+contract FinancingContract is IFinancing, AdapterGuard, Reimbursable {
     struct ProposalDetails {
         address applicant; // the proposal applicant address, can not be a reserved address
         uint256 amount; // the amount requested for funding
@@ -48,13 +43,6 @@ contract FinancingContract is
 
     // keeps track of all financing proposals handled by each dao
     mapping(address => mapping(bytes32 => ProposalDetails)) public proposals;
-
-    /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
 
     /**
      * @notice Creates and sponsors a financing proposal.
@@ -69,6 +57,7 @@ contract FinancingContract is
      * @param amount The desired amount.
      * @param data Additional details about the financing proposal.
      */
+    // slither-disable-next-line reentrancy-benign
     function submitProposal(
         DaoRegistry dao,
         bytes32 proposalId,
@@ -76,12 +65,14 @@ contract FinancingContract is
         address token,
         uint256 amount,
         bytes memory data
-    ) external override reentrancyGuard(dao) {
+    ) external override reimbursable(dao) {
         require(amount > 0, "invalid requested amount");
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
         require(bank.isTokenAllowed(token), "token not allowed");
         require(
-            isNotReservedAddress(applicant),
+            DaoHelper.isNotReservedAddress(applicant),
             "applicant using reserved address"
         );
         dao.submitProposal(proposalId);
@@ -91,14 +82,15 @@ contract FinancingContract is
         proposal.amount = amount;
         proposal.token = token;
 
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
-        address sponsoredBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
+        IVoting votingContract = IVoting(
+            dao.getAdapterAddress(DaoHelper.VOTING)
+        );
+        address sponsoredBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
 
         dao.sponsorProposal(proposalId, sponsoredBy, address(votingContract));
         votingContract.startNewVotingForProposal(dao, proposalId, data);
@@ -112,11 +104,11 @@ contract FinancingContract is
      * @param dao The DAO Address.
      * @param proposalId The proposal id.
      */
-    function processProposal(DaoRegistry dao, bytes32 proposalId)
-        external
-        override
-        reentrancyGuard(dao)
-    {
+    // slither-disable-next-line reentrancy-benign
+    function processProposal(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external override reimbursable(dao) {
         ProposalDetails memory details = proposals[address(dao)][proposalId];
 
         IVoting votingContract = IVoting(dao.votingAdapter(proposalId));
@@ -128,9 +120,21 @@ contract FinancingContract is
             "proposal needs to pass"
         );
         dao.processProposal(proposalId);
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
 
-        bank.subtractFromBalance(GUILD, details.token, details.amount);
-        bank.addToBalance(details.applicant, details.token, details.amount);
+        bank.subtractFromBalance(
+            dao,
+            DaoHelper.GUILD,
+            details.token,
+            details.amount
+        );
+        bank.addToBalance(
+            dao,
+            details.applicant,
+            details.token,
+            details.amount
+        );
     }
 }

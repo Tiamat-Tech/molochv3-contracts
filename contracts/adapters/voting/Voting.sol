@@ -3,11 +3,13 @@ pragma solidity ^0.8.0;
 // SPDX-License-Identifier: MIT
 
 import "../../core/DaoRegistry.sol";
-import "../../core/DaoConstants.sol";
 import "../../extensions/bank/Bank.sol";
 import "../../guards/MemberGuard.sol";
 import "../../guards/AdapterGuard.sol";
 import "../interfaces/IVoting.sol";
+import "../../helpers/DaoHelper.sol";
+import "../modifiers/Reimbursable.sol";
+import "../../helpers/GovernanceHelper.sol";
 
 /**
 MIT License
@@ -33,7 +35,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract VotingContract is IVoting, DaoConstants, MemberGuard, AdapterGuard {
+contract VotingContract is IVoting, MemberGuard, AdapterGuard, Reimbursable {
     struct Voting {
         uint256 nbYes;
         uint256 nbNo;
@@ -108,11 +110,13 @@ contract VotingContract is IVoting, DaoConstants, MemberGuard, AdapterGuard {
      * @param proposalId The proposal needs to be sponsored, and not processed.
      * @param voteValue Only Yes (1) and No (2) votes are allowed.
      */
+    // The function is protected against reentrancy with the reimbursable modifier
+    //slither-disable-next-line reentrancy-no-eth,reentrancy-benign
     function submitVote(
         DaoRegistry dao,
         bytes32 proposalId,
         uint256 voteValue
-    ) external onlyMember(dao) {
+    ) external onlyMember(dao) reimbursable(dao) {
         require(
             dao.getProposalFlag(proposalId, DaoRegistry.ProposalFlag.SPONSORED),
             "the proposal has not been sponsored yet"
@@ -132,30 +136,35 @@ contract VotingContract is IVoting, DaoConstants, MemberGuard, AdapterGuard {
         );
 
         Voting storage vote = votes[address(dao)][proposalId];
-
+        // slither-disable-next-line timestamp
         require(
             vote.startingTime > 0,
             "this proposalId has no vote going on at the moment"
         );
+        // slither-disable-next-line timestamp
         require(
             block.timestamp <
                 vote.startingTime + dao.getConfiguration(VotingPeriod),
             "vote has already ended"
         );
 
-        address memberAddr = dao.getAddressIfDelegated(msg.sender);
+        address memberAddr = DaoHelper.msgSender(dao, msg.sender);
 
         require(vote.votes[memberAddr] == 0, "member has already voted");
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-        uint256 correctWeight =
-            bank.getPriorAmount(memberAddr, UNITS, vote.blockNumber);
+        uint256 votingWeight = GovernanceHelper.getVotingWeight(
+            dao,
+            memberAddr,
+            proposalId,
+            vote.blockNumber
+        );
+        if (votingWeight == 0) revert("vote not allowed");
 
         vote.votes[memberAddr] = voteValue;
 
         if (voteValue == 1) {
-            vote.nbYes = vote.nbYes + correctWeight;
+            vote.nbYes = vote.nbYes + votingWeight;
         } else if (voteValue == 2) {
-            vote.nbNo = vote.nbNo + correctWeight;
+            vote.nbNo = vote.nbNo + votingWeight;
         }
     }
 
@@ -171,18 +180,17 @@ contract VotingContract is IVoting, DaoConstants, MemberGuard, AdapterGuard {
      * 3: not pass
      * 4: in progress
      */
-    function voteResult(DaoRegistry dao, bytes32 proposalId)
-        external
-        view
-        override
-        returns (VotingState state)
-    {
+    function voteResult(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external view override returns (VotingState state) {
         Voting storage vote = votes[address(dao)][proposalId];
         if (vote.startingTime == 0) {
             return VotingState.NOT_STARTED;
         }
 
         if (
+            // slither-disable-next-line timestamp
             block.timestamp <
             vote.startingTime + dao.getConfiguration(VotingPeriod)
         ) {
@@ -190,6 +198,7 @@ contract VotingContract is IVoting, DaoConstants, MemberGuard, AdapterGuard {
         }
 
         if (
+            // slither-disable-next-line timestamp
             block.timestamp <
             vote.startingTime +
                 dao.getConfiguration(VotingPeriod) +

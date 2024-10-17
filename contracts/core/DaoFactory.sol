@@ -1,8 +1,6 @@
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 // SPDX-License-Identifier: MIT
-import "./DaoConstants.sol";
 import "./DaoRegistry.sol";
 import "./CloneFactory.sol";
 
@@ -30,7 +28,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract DaoFactory is CloneFactory, DaoConstants {
+contract DaoFactory is CloneFactory {
     struct Adapter {
         bytes32 id;
         address addr;
@@ -52,6 +50,7 @@ contract DaoFactory is CloneFactory, DaoConstants {
     event DAOCreated(address _address, string _name);
 
     constructor(address _identityAddress) {
+        require(_identityAddress != address(0x0), "invalid addr");
         identityAddress = _identityAddress;
     }
 
@@ -71,11 +70,11 @@ contract DaoFactory is CloneFactory, DaoConstants {
         DaoRegistry dao = DaoRegistry(_createClone(identityAddress));
 
         address daoAddr = address(dao);
-        dao.initialize(creator, msg.sender);
-
         addresses[hashedName] = daoAddr;
         daos[daoAddr] = hashedName;
 
+        dao.initialize(creator, msg.sender);
+        //slither-disable-next-line reentrancy-events
         emit DAOCreated(daoAddr, daoName);
     }
 
@@ -84,11 +83,9 @@ contract DaoFactory is CloneFactory, DaoConstants {
      * @return The address of a DAO, given its name.
      * @param daoName Name of the DAO to be searched.
      */
-    function getDaoAddress(string calldata daoName)
-        public
-        view
-        returns (address)
-    {
+    function getDaoAddress(
+        string calldata daoName
+    ) external view returns (address) {
         return addresses[keccak256(abi.encode(daoName))];
     }
 
@@ -100,9 +97,10 @@ contract DaoFactory is CloneFactory, DaoConstants {
      * @param dao DaoRegistry to have adapters added to.
      * @param adapters Adapter structs to be added to the DAO.
      */
-    function addAdapters(DaoRegistry dao, Adapter[] calldata adapters)
-        external
-    {
+    function addAdapters(
+        DaoRegistry dao,
+        Adapter[] calldata adapters
+    ) external {
         require(dao.isMember(msg.sender), "not member");
         //Registring Adapters
         require(
@@ -111,6 +109,7 @@ contract DaoFactory is CloneFactory, DaoConstants {
         );
 
         for (uint256 i = 0; i < adapters.length; i++) {
+            //slither-disable-next-line calls-loop
             dao.replaceAdapter(
                 adapters[i].id,
                 adapters[i].addr,
@@ -142,6 +141,7 @@ contract DaoFactory is CloneFactory, DaoConstants {
         );
 
         for (uint256 i = 0; i < adapters.length; i++) {
+            //slither-disable-next-line calls-loop
             dao.setAclToExtensionForAdapter(
                 extension,
                 adapters[i].addr,

@@ -3,11 +3,13 @@ name: Test
 on:
   push:
     branches:
-      # long-lived branches
       - master
-  pull_request_target:
+  pull_request:
     branches:
       - "*"
+
+env:
+  ETH_NODE_URL: ${{ secrets.ETH_NODE_URL }}
 
 jobs:
   test:
@@ -19,7 +21,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v2
         with:
-          node-version: "14.17.0"
+          node-version: "18.20.0"
 
       - name: Setup SSH to install dependencies
         uses: webfactory/ssh-agent@v0.5.0
@@ -32,7 +34,7 @@ jobs:
       - name: Run Linter
         run: npm run lint
 
-      - name: Compile Solidity Contracts
+      - name: Compile Contracts
         run: npm run compile
 
       - name: Run Tests

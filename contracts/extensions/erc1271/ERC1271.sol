@@ -2,17 +2,11 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../../core/DaoConstants.sol";
 import "../../core/DaoRegistry.sol";
 import "../IExtension.sol";
+import "../../helpers/DaoHelper.sol";
 import "../../guards/AdapterGuard.sol";
-
-interface IERC1271 {
-    function isValidSignature(bytes32 _messageHash, bytes memory _signature)
-        external
-        view
-        returns (bytes4 magicValue);
-}
+import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 
 /**
 MIT License
@@ -41,13 +35,13 @@ SOFTWARE.
 /**
  * @dev Signs arbitrary messages and exposes ERC1271 interface
  */
-contract ERC1271Extension is DaoConstants, AdapterGuard, IExtension, IERC1271 {
-    using Address for address payable;
-
+contract ERC1271Extension is IExtension, IERC1271 {
     bool public initialized = false; // internally tracks deployment under eip-1167 proxy pattern
     DaoRegistry public dao;
 
-    enum AclFlag {SIGN}
+    enum AclFlag {
+        SIGN
+    }
 
     struct DAOSignature {
         bytes32 signatureHash;
@@ -59,16 +53,18 @@ contract ERC1271Extension is DaoConstants, AdapterGuard, IExtension, IERC1271 {
     /// @notice Clonable contract must have an empty constructor
     constructor() {}
 
-    modifier hasExtensionAccess(AclFlag flag) {
+    modifier hasExtensionAccess(DaoRegistry _dao, AclFlag flag) {
         require(
-            address(this) == msg.sender ||
-                address(dao) == msg.sender ||
-                dao.state() == DaoRegistry.DaoState.CREATION ||
-                dao.hasAdapterAccessToExtension(
-                    msg.sender,
-                    address(this),
-                    uint8(flag)
-                ),
+            dao == _dao &&
+                (address(this) == msg.sender ||
+                    address(dao) == msg.sender ||
+                    !initialized ||
+                    DaoHelper.isInCreationModeAndHasAccess(dao) ||
+                    dao.hasAdapterAccessToExtension(
+                        msg.sender,
+                        address(this),
+                        uint8(flag)
+                    )),
             "erc1271::accessDenied"
         );
         _;
@@ -77,13 +73,12 @@ contract ERC1271Extension is DaoConstants, AdapterGuard, IExtension, IERC1271 {
     /**
      * @notice Initialises the ERC1271 extension to be associated with a DAO
      * @dev Can only be called once
-     * @param creator The DAO's creator, who will be an initial member
+     * @param _dao The dao address that will be associated with the new extension.
      */
-    function initialize(DaoRegistry _dao, address creator) external override {
-        require(!initialized, "erc1271::already initialized");
-        require(_dao.isMember(creator), "erc1271::not member");
-        dao = _dao;
+    function initialize(DaoRegistry _dao, address) external override {
+        require(!initialized, "already initialized");
         initialized = true;
+        dao = _dao;
     }
 
     /**
@@ -92,12 +87,10 @@ contract ERC1271Extension is DaoConstants, AdapterGuard, IExtension, IERC1271 {
      * @param signature The signature in bytes to be encoded, hashed and verified.
      * @return The magic number in bytes4 in case the signature is valid, otherwise it reverts.
      */
-    function isValidSignature(bytes32 permissionHash, bytes memory signature)
-        public
-        view
-        override
-        returns (bytes4)
-    {
+    function isValidSignature(
+        bytes32 permissionHash,
+        bytes memory signature
+    ) external view override returns (bytes4) {
         DAOSignature memory daoSignature = signatures[permissionHash];
         require(daoSignature.magicValue != 0, "erc1271::invalid signature");
         require(
@@ -116,10 +109,11 @@ contract ERC1271Extension is DaoConstants, AdapterGuard, IExtension, IERC1271 {
      * @param magicValue The value to be returned by the ERC1271 interface upon success.
      */
     function sign(
+        DaoRegistry _dao,
         bytes32 permissionHash,
         bytes32 signatureHash,
         bytes4 magicValue
-    ) public hasExtensionAccess(AclFlag.SIGN) {
+    ) external hasExtensionAccess(_dao, AclFlag.SIGN) {
         signatures[permissionHash] = DAOSignature({
             signatureHash: signatureHash,
             magicValue: magicValue

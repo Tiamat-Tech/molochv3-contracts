@@ -6,6 +6,7 @@ import "../core/DaoRegistry.sol";
 import "../guards/MemberGuard.sol";
 import "../adapters/interfaces/IVoting.sol";
 import "../helpers/FairShareHelper.sol";
+import "../helpers/DaoHelper.sol";
 import "../extensions/bank/Bank.sol";
 
 /**
@@ -56,41 +57,45 @@ library GuildKickHelper {
         // Calculates the total units, loot and locked loot before any internal transfers
         // it considers the locked loot to be able to calculate the fair amount to ragequit,
         // but locked loot can not be burned.
-        uint256 initialTotalUnitsAndLoot =
-            bank.balanceOf(TOTAL, UNITS) + bank.balanceOf(TOTAL, LOOT);
+        uint256 initialTotalTokens = DaoHelper.totalTokens(bank);
 
         uint256 unitsToBurn = bank.balanceOf(kickedMember, UNITS);
         uint256 lootToBurn = bank.balanceOf(kickedMember, LOOT);
         uint256 unitsAndLootToBurn = unitsToBurn + lootToBurn;
-
-        // Transfers the funds from the internal Guild account to the internal member's account.
-        for (uint256 i = 0; i < nbTokens; i++) {
-            address token = bank.getToken(i);
-            // Calculates the fair amount of funds to ragequit based on the token, units and loot.
-            // It takes into account the historical guild balance when the kick proposal was created.
-            uint256 amountToRagequit =
-                FairShareHelper.calc(
+        dao.unjailMember(kickedMember);
+        if (unitsAndLootToBurn > 0) {
+            // Transfers the funds from the internal Guild account to the internal member's account.
+            for (uint256 i = 0; i < nbTokens; i++) {
+                //slither-disable-next-line calls-loop
+                address token = bank.getToken(i);
+                // Calculates the fair amount of funds to ragequit based on the token, units and loot.
+                // It takes into account the historical guild balance when the kick proposal was created.
+                //slither-disable-next-line calls-loop
+                uint256 amountToRagequit = FairShareHelper.calc(
                     bank.balanceOf(GUILD, token),
                     unitsAndLootToBurn,
-                    initialTotalUnitsAndLoot
+                    initialTotalTokens
                 );
 
-            // Ony execute the internal transfer if the user has enough funds to receive.
-            if (amountToRagequit > 0) {
-                // gas optimization to allow a higher maximum token limit
-                // deliberately not using safemath here to keep overflows from preventing the function execution
-                // (which would break ragekicks) if a token overflows,
-                // it is because the supply was artificially inflated to oblivion, so we probably don"t care about it anyways
-                bank.internalTransfer(
-                    GUILD,
-                    kickedMember,
-                    token,
-                    amountToRagequit
-                );
+                // Ony execute the internal transfer if the user has enough funds to receive.
+                if (amountToRagequit > 0) {
+                    // gas optimization to allow a higher maximum token limit
+                    // deliberately not using safemath here to keep overflows from preventing the function execution
+                    // (which would break ragekicks) if a token overflows,
+                    // it is because the supply was artificially inflated to oblivion, so we probably don"t care about it anyways
+                    //slither-disable-next-line calls-loop
+                    bank.internalTransfer(
+                        dao,
+                        GUILD,
+                        kickedMember,
+                        token,
+                        amountToRagequit
+                    );
+                }
             }
-        }
 
-        bank.subtractFromBalance(kickedMember, UNITS, unitsToBurn);
-        bank.subtractFromBalance(kickedMember, LOOT, lootToBurn);
+            bank.subtractFromBalance(dao, kickedMember, UNITS, unitsToBurn);
+            bank.subtractFromBalance(dao, kickedMember, LOOT, lootToBurn);
+        }
     }
 }

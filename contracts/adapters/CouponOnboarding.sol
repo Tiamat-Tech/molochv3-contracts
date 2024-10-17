@@ -2,12 +2,12 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
 import "../extensions/bank/Bank.sol";
 import "../guards/AdapterGuard.sol";
+import "./modifiers/Reimbursable.sol";
 import "../utils/Signatures.sol";
-import "../utils/PotentialNewMember.sol";
+import "../helpers/DaoHelper.sol";
 
 /**
 MIT License
@@ -33,17 +33,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract CouponOnboardingContract is
-    DaoConstants,
-    AdapterGuard,
-    Signatures,
-    PotentialNewMember
-{
+contract CouponOnboardingContract is Reimbursable, AdapterGuard, Signatures {
     struct Coupon {
         address authorizedMember;
         uint256 amount;
         uint256 nonce;
     }
+
+    using SafeERC20 for IERC20;
 
     string public constant COUPON_MESSAGE_TYPE =
         "Message(address authorizedMember,uint256 amount,uint256 nonce)";
@@ -55,7 +52,8 @@ contract CouponOnboardingContract is
     bytes32 constant TokenAddrToMint =
         keccak256("coupon-onboarding.tokenAddrToMint");
 
-    uint256 private _chainId;
+    bytes32 constant ERC20InternalTokenAddr =
+        keccak256("coupon-onboarding.erc20.internal.token.address");
 
     mapping(address => mapping(uint256 => uint256)) private _flags;
 
@@ -66,32 +64,40 @@ contract CouponOnboardingContract is
         uint256 amount
     );
 
-    constructor(uint256 chainId) {
-        _chainId = chainId;
-    }
-
-    /**
-     * @notice default fallback function to prevent from sending ether to the contract
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
-
     /**
      * @notice Configures the Adapter with the coupon signer address and token to mint.
-     * @param signerAddress is the DAO instance to be configured
-     * @param tokenAddrToMint is the coupon to hash
+     * @param signerAddress the address of the coupon signer
+     * @param erc20 the address of the internal ERC20 token to issue shares
+     * @param tokenAddrToMint the address of the token to mint the coupon
+     * @param maxAmount max amount of coupons to mint
      */
     function configureDao(
         DaoRegistry dao,
         address signerAddress,
-        address tokenAddrToMint
+        address erc20,
+        address tokenAddrToMint,
+        uint88 maxAmount
     ) external onlyAdapter(dao) {
         dao.setAddressConfiguration(SignerAddressConfig, signerAddress);
+        dao.setAddressConfiguration(ERC20InternalTokenAddr, erc20);
         dao.setAddressConfiguration(TokenAddrToMint, tokenAddrToMint);
 
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-        bank.registerPotentialNewInternalToken(tokenAddrToMint);
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
+        bank.registerPotentialNewInternalToken(dao, tokenAddrToMint);
+        uint160 currentBalance = bank.balanceOf(
+            DaoHelper.TOTAL,
+            tokenAddrToMint
+        );
+        if (currentBalance < maxAmount) {
+            bank.addToBalance(
+                dao,
+                DaoHelper.GUILD,
+                tokenAddrToMint,
+                maxAmount - currentBalance
+            );
+        }
     }
 
     /**
@@ -99,22 +105,20 @@ contract CouponOnboardingContract is
      * @param dao is the DAO instance to be configured
      * @param coupon is the coupon to hash
      */
-    function hashCouponMessage(DaoRegistry dao, Coupon memory coupon)
-        public
-        view
-        returns (bytes32)
-    {
-        bytes32 message =
-            keccak256(
-                abi.encode(
-                    COUPON_MESSAGE_TYPEHASH,
-                    coupon.authorizedMember,
-                    coupon.amount,
-                    coupon.nonce
-                )
-            );
+    function hashCouponMessage(
+        DaoRegistry dao,
+        Coupon memory coupon
+    ) public view returns (bytes32) {
+        bytes32 message = keccak256(
+            abi.encode(
+                COUPON_MESSAGE_TYPEHASH,
+                coupon.authorizedMember,
+                coupon.amount,
+                coupon.nonce
+            )
+        );
 
-        return hashMessage(dao, _chainId, address(this), message);
+        return hashMessage(dao, address(this), message);
     }
 
     /**
@@ -125,43 +129,63 @@ contract CouponOnboardingContract is
      * @param nonce is a unique identifier for this coupon request
      * @param signature is message signature for verification
      */
+    // function is protected against reentrancy attack with the reentrancyGuard(dao)
+    // slither-disable-next-line reentrancy-benign
     function redeemCoupon(
         DaoRegistry dao,
         address authorizedMember,
         uint256 amount,
         uint256 nonce,
         bytes memory signature
-    ) external reentrancyGuard(dao) {
-        uint256 currentFlag = _flags[address(dao)][nonce / 256];
-        require(
-            getFlag(currentFlag, nonce % 256) == false,
-            "coupon has already been redeemed"
-        );
-
-        address signerAddress =
-            dao.getAddressConfiguration(SignerAddressConfig);
+    ) external reimbursable(dao) {
+        {
+            uint256 currentFlag = _flags[address(dao)][nonce / 256];
+            _flags[address(dao)][nonce / 256] = DaoHelper.setFlag(
+                currentFlag,
+                nonce % 256,
+                true
+            );
+            require(
+                DaoHelper.getFlag(currentFlag, nonce % 256) == false,
+                "coupon already redeemed"
+            );
+        }
 
         Coupon memory coupon = Coupon(authorizedMember, amount, nonce);
         bytes32 hash = hashCouponMessage(dao, coupon);
 
-        address recoveredKey = ECDSA.recover(hash, signature);
-
-        require(recoveredKey == signerAddress, "invalid sig");
-
-        _flags[address(dao)][nonce / 256] = setFlag(
-            currentFlag,
-            nonce % 256,
-            true
+        require(
+            SignatureChecker.isValidSignatureNow(
+                dao.getAddressConfiguration(SignerAddressConfig),
+                hash,
+                signature
+            ),
+            "invalid sig"
         );
 
-        address tokenAddrToMint =
-            address(dao.getAddressConfiguration(TokenAddrToMint));
-
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-
-        bank.addToBalance(authorizedMember, tokenAddrToMint, amount);
-        // address needs to be added to the members mappings
-        potentialNewMember(authorizedMember, dao, bank);
+        IERC20 erc20 = IERC20(
+            dao.getAddressConfiguration(ERC20InternalTokenAddr)
+        );
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
+        if (address(erc20) == address(0x0)) {
+            address tokenAddressToMint = dao.getAddressConfiguration(
+                TokenAddrToMint
+            );
+            bank.internalTransfer(
+                dao,
+                DaoHelper.GUILD,
+                authorizedMember,
+                tokenAddressToMint,
+                amount
+            );
+            // address needs to be added to the members mappings. ERC20 is doing it for us so no need to do it twice
+            DaoHelper.potentialNewMember(authorizedMember, dao, bank);
+        } else {
+            erc20.safeTransferFrom(DaoHelper.GUILD, authorizedMember, amount);
+        }
+        //slither-disable-next-line reentrancy-events
         emit CouponRedeemed(address(dao), nonce, authorizedMember, amount);
     }
 }

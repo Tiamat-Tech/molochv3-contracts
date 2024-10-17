@@ -27,17 +27,19 @@ SOFTWARE.
 
 // Whole-script strict mode syntax
 "use strict";
-
+const { expect } = require("chai");
 const {
   toBN,
+  toWei,
   fromUtf8,
+  fromAscii,
   unitPrice,
   UNITS,
   GUILD,
   ETH_TOKEN,
   LOOT,
   ESCROW,
-} = require("../../utils/ContractUtil.js");
+} = require("../../utils/contract-util");
 
 const {
   deployDefaultDao,
@@ -45,15 +47,11 @@ const {
   revertChainSnapshot,
   proposalIdGenerator,
   advanceTime,
-  accounts,
-  expectRevert,
-  expect,
-} = require("../../utils/OZTestUtil.js");
+  getAccounts,
+  web3,
+} = require("../../utils/hardhat-test-util");
 
-const { onboardingNewMember } = require("../../utils/TestUtils.js");
-
-const daoOwner = accounts[2];
-const daoCreator = accounts[9];
+const { onboardingNewMember } = require("../../utils/test-util");
 
 const proposalCounter = proposalIdGenerator().generator;
 
@@ -62,14 +60,20 @@ function getProposalCounter() {
 }
 
 describe("Adapter - Distribute", () => {
+  let accounts, daoOwner;
+
   before("deploy dao", async () => {
-    const { dao, adapters, extensions } = await deployDefaultDao({
+    accounts = await getAccounts();
+    daoOwner = accounts[0];
+
+    const { dao, adapters, extensions, factories } = await deployDefaultDao({
       owner: daoOwner,
-      creator: daoCreator,
     });
+
     this.dao = dao;
     this.adapters = adapters;
     this.extensions = extensions;
+    this.factories = factories;
     this.snapshotId = await takeChainSnapshot();
   });
 
@@ -107,7 +111,7 @@ describe("Adapter - Distribute", () => {
   it("should be possible to distribute funds to only 1 member of the DAO", async () => {
     const daoMember = accounts[3];
     const dao = this.dao;
-    const bank = this.extensions.bank;
+    const bank = this.extensions.bankExt;
     const onboarding = this.adapters.onboarding;
     const voting = this.adapters.voting;
     const distributeContract = this.adapters.distribute;
@@ -125,7 +129,7 @@ describe("Adapter - Distribute", () => {
 
     // Checks the Guild Bank Balance
     let guildBalance = await bank.balanceOf(GUILD, ETH_TOKEN);
-    expect(toBN(guildBalance).toString()).equal("1200000000000000000");
+    expect(guildBalance.toString()).equal("1200000000000000000");
 
     // Checks the member units (to make sure it was created)
     let units = await bank.balanceOf(daoMember, UNITS);
@@ -156,11 +160,11 @@ describe("Adapter - Distribute", () => {
     });
 
     const escrowBalance = await bank.balanceOf(ESCROW, ETH_TOKEN);
-    expect(toBN(escrowBalance).toString()).equal(amountToDistribute.toString());
+    expect(escrowBalance.toString()).equal(amountToDistribute.toString());
 
     // Checks the member's internal balance before sending the funds
     let memberBalance = await bank.balanceOf(daoMember, ETH_TOKEN);
-    expect(toBN(memberBalance).toString()).equal("0");
+    expect(memberBalance.toString()).equal("0");
 
     // Distribute the funds to the DAO member
     // We can use 0 index here because the distribution happens for only 1 member
@@ -180,7 +184,7 @@ describe("Adapter - Distribute", () => {
     const daoMemberA = accounts[3];
     const daoMemberB = accounts[4];
     const dao = this.dao;
-    const bank = this.extensions.bank;
+    const bank = this.extensions.bankExt;
     const onboarding = this.adapters.onboarding;
     const voting = this.adapters.voting;
     const distributeContract = this.adapters.distribute;
@@ -210,7 +214,7 @@ describe("Adapter - Distribute", () => {
 
     // Checks the Guild Bank Balance
     let guildBalance = await bank.balanceOf(GUILD, ETH_TOKEN);
-    expect(toBN(guildBalance).toString()).equal("1800000000000000000");
+    expect(guildBalance.toString()).equal("1800000000000000000");
 
     // Checks the member units (to make sure it was created)
     let unitsMemberA = await bank.balanceOf(daoMemberA, UNITS);
@@ -245,19 +249,19 @@ describe("Adapter - Distribute", () => {
 
     // Checks the member's internal balance before sending the funds
     let memberABalance = await bank.balanceOf(daoMemberA, ETH_TOKEN);
-    expect(toBN(memberABalance).toString()).equal("0");
+    expect(memberABalance.toString()).equal("0");
     let memberBBalance = await bank.balanceOf(daoMemberB, ETH_TOKEN);
-    expect(toBN(memberBBalance).toString()).equal("0");
+    expect(memberBBalance.toString()).equal("0");
 
-    let numberOfMembers = toBN(await dao.getNbMembers()).toNumber();
-    // It is expected to get 5 members:
+    let numberOfMembers = await dao.getNbMembers();
+    // It is expected to get 4 members:
     // 1 - dao owner
-    // 1 - dao factory
-    // 1 - dao payer (who paid to create the dao)
-    // 2 - dao members
+    // 2 - dao factory
+    // 3 - dao payer (who paid to create the dao)
+    // 4 - dao member
     // But the dao owner and the factory addresses are not active members
     // so they will not receive funds.
-    expect(numberOfMembers).equal(5);
+    expect(numberOfMembers.toString()).equal("4");
 
     // Distribute the funds to the DAO member
     // toIndex = number of members to process and distribute the funds to all members
@@ -266,12 +270,17 @@ describe("Adapter - Distribute", () => {
       gasPrice: toBN("0"),
     });
 
-    memberABalance = await bank.balanceOf(daoMemberA, ETH_TOKEN);
-    expect(memberABalance.toString()).equal("4"); //4.9999... rounded to 4
-    memberBBalance = await bank.balanceOf(daoMemberB, ETH_TOKEN);
-    expect(memberBBalance.toString()).equal("9"); //9.9999... rounded to 9
     let ownerBalance = await bank.balanceOf(daoOwner, ETH_TOKEN);
     expect(ownerBalance.toString()).equal("0");
+    let factoryBalance = await bank.balanceOf(
+      this.factories.daoFactory.address,
+      ETH_TOKEN
+    );
+    expect(factoryBalance.toString()).equal("0");
+    memberBBalance = await bank.balanceOf(daoMemberB, ETH_TOKEN);
+    expect(memberBBalance.toString()).equal("9"); //9.9999... rounded to 9
+    memberABalance = await bank.balanceOf(daoMemberA, ETH_TOKEN);
+    expect(memberABalance.toString()).equal("4"); //4.9999... rounded to 4
   });
 
   it("should not be possible to create a proposal with the amount.toEquals to 0", async () => {
@@ -280,7 +289,7 @@ describe("Adapter - Distribute", () => {
 
     // Submit distribute proposal with invalid amount
     const amountToDistribute = 0;
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         getProposalCounter(),
@@ -292,9 +301,8 @@ describe("Adapter - Distribute", () => {
           from: daoOwner,
           gasPrice: toBN("0"),
         }
-      ),
-      "invalid amount"
-    );
+      )
+    ).to.be.revertedWith("invalid amount");
   });
 
   it("should not be possible to create a proposal with an invalid token", async () => {
@@ -303,7 +311,7 @@ describe("Adapter - Distribute", () => {
 
     // Submit distribute proposal with invalid token
     const invalidToken = "0x0000000000000000000000000000000000000123";
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         getProposalCounter(),
@@ -315,9 +323,8 @@ describe("Adapter - Distribute", () => {
           from: daoOwner,
           gasPrice: toBN("0"),
         }
-      ),
-      "token not allowed"
-    );
+      )
+    ).to.be.revertedWith("token not allowed");
   });
 
   it("should not be possible to create a proposal if the sender is not a member", async () => {
@@ -325,7 +332,7 @@ describe("Adapter - Distribute", () => {
     const dao = this.dao;
     const distributeContract = this.adapters.distribute;
 
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         getProposalCounter(),
@@ -337,9 +344,8 @@ describe("Adapter - Distribute", () => {
           from: nonMember, // The sender is not a member
           gasPrice: toBN("0"),
         }
-      ),
-      "onlyMember"
-    );
+      )
+    ).to.be.revertedWith("onlyMember");
   });
 
   it("should not be possible to create a proposal if the target member does not have units (advisor)", async () => {
@@ -362,7 +368,7 @@ describe("Adapter - Distribute", () => {
     );
 
     // Submit distribute proposal with a non active member
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         getProposalCounter(),
@@ -374,9 +380,8 @@ describe("Adapter - Distribute", () => {
           from: daoOwner,
           gasPrice: toBN("0"),
         }
-      ),
-      "not enough units"
-    );
+      )
+    ).to.be.revertedWith("not enough units");
   });
 
   it("should not be possible to create a proposal if the a non member is indicated to receive the funds", async () => {
@@ -385,7 +390,7 @@ describe("Adapter - Distribute", () => {
     const distributeContract = this.adapters.distribute;
 
     // Submit distribute proposal with a non member
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         getProposalCounter(),
@@ -397,9 +402,8 @@ describe("Adapter - Distribute", () => {
           from: daoOwner,
           gasPrice: toBN("0"),
         }
-      ),
-      "not enough units"
-    );
+      )
+    ).to.be.revertedWith("not enough units");
   });
 
   it("should not be possible to create more than one proposal using the same proposal id", async () => {
@@ -431,7 +435,7 @@ describe("Adapter - Distribute", () => {
     );
 
     // Submit distribute proposal using the same id
-    await expectRevert(
+    await expect(
       distributeContract.submitProposal(
         dao.address,
         proposalId,
@@ -443,9 +447,8 @@ describe("Adapter - Distribute", () => {
           from: daoOwner,
           gasPrice: toBN("0"),
         }
-      ),
-      "proposalId must be unique"
-    );
+      )
+    ).to.be.revertedWith("proposalId must be unique");
   });
 
   it("should not be possible to process a proposal that was not voted on", async () => {
@@ -477,13 +480,12 @@ describe("Adapter - Distribute", () => {
     );
 
     // Starts to process the proposal
-    await expectRevert(
+    await expect(
       distributeContract.processProposal(dao.address, proposalId, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "proposal has not been voted on"
-    );
+      })
+    ).to.be.revertedWith("proposal has not been voted on");
   });
 
   it("should not be possible to distribute if proposal vote result is TIE", async () => {
@@ -534,13 +536,12 @@ describe("Adapter - Distribute", () => {
     });
 
     // Try to distribute funds when the proposal is not in progress
-    await expectRevert(
+    await expect(
       distributeContract.distribute(dao.address, 0, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "distribution completed or does not exist"
-    );
+      })
+    ).to.be.revertedWith("distrib completed or not exist");
   });
 
   it("should not be possible to distribute if proposal vote result is NOT_PASS", async () => {
@@ -592,13 +593,12 @@ describe("Adapter - Distribute", () => {
     });
 
     // Try to distribute funds when the proposal is not in progress
-    await expectRevert(
+    await expect(
       distributeContract.distribute(dao.address, 0, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "distribution completed or does not exist"
-    );
+      })
+    ).to.be.revertedWith("distrib completed or not exist");
   });
 
   it("should not be possible to process a proposal that was already processed", async () => {
@@ -643,13 +643,12 @@ describe("Adapter - Distribute", () => {
     });
 
     // Attempt to process the same proposal that is already in progress
-    await expectRevert(
+    await expect(
       distributeContract.processProposal(dao.address, proposalId, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "flag already set"
-    );
+      })
+    ).to.be.revertedWith("flag already set");
   });
 
   it("should not be possible to process a new proposal if there is another in progress", async () => {
@@ -711,13 +710,12 @@ describe("Adapter - Distribute", () => {
     await advanceTime(10000);
 
     // Attempt to process the new proposal but there is one in progress already
-    await expectRevert(
+    await expect(
       distributeContract.processProposal(dao.address, result.proposalId, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "another proposal already in progress"
-    );
+      })
+    ).to.be.revertedWith("another proposal already in progress");
   });
 
   it("should not be possible to distribute the funds if the proposal is not in progress", async () => {
@@ -749,12 +747,36 @@ describe("Adapter - Distribute", () => {
     );
 
     // Try to distribute funds when the proposal is not in progress
-    await expectRevert(
+    await expect(
       distributeContract.distribute(dao.address, 1, {
         from: daoOwner,
         gasPrice: toBN("0"),
-      }),
-      "distribution completed or does not exist"
-    );
+      })
+    ).to.be.revertedWith("distrib completed or not exist");
+  });
+
+  it("should not be possible to send ETH to the adapter via receive function", async () => {
+    const adapter = this.adapters.distribute;
+    await expect(
+      web3.eth.sendTransaction({
+        to: adapter.address,
+        from: daoOwner,
+        gasPrice: toBN("0"),
+        value: toWei("1"),
+      })
+    ).to.be.revertedWith("revert");
+  });
+
+  it("should not be possible to send ETH to the adapter via fallback function", async () => {
+    const adapter = this.adapters.distribute;
+    await expect(
+      web3.eth.sendTransaction({
+        to: adapter.address,
+        from: daoOwner,
+        gasPrice: toBN("0"),
+        value: toWei("1"),
+        data: fromAscii("should go to fallback func"),
+      })
+    ).to.be.revertedWith("revert");
   });
 });

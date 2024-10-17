@@ -4,6 +4,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+.history/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -69,8 +70,7 @@ typings/
 .yarn-integrity
 
 # dotenv environment variables file
-.env
-.env.test
+.env*
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -111,12 +111,14 @@ generated/
 coverage
 coverage.json
 coverageEnv
+contracts-backup
 .coverage_artifacts
 .coverage_contracts
 
-.env
+.env*
 
-docker/data
+# Tribute Subgraph
+tribute-subgraph/
 artifacts
 cache
 typechain
@@ -128,3 +130,11 @@ subgraph.yaml
 
 # Logs of the contract deployment
 *-deploy.log
+
+# Sarif 
+*.sarif
+
+# VS Code file history
+.history
+
+.openzeppelin

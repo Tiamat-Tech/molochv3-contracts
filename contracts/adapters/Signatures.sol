@@ -3,12 +3,12 @@ pragma solidity ^0.8.0;
 // SPDX-License-Identifier: MIT
 
 import "./interfaces/ISignatures.sol";
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
 import "../extensions/erc1271/ERC1271.sol";
 import "../adapters/interfaces/IVoting.sol";
-import "../guards/MemberGuard.sol";
 import "../guards/AdapterGuard.sol";
+import "./modifiers/Reimbursable.sol";
+import "../helpers/DaoHelper.sol";
 
 /**
 MIT License
@@ -34,12 +34,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract SignaturesContract is
-    ISignatures,
-    DaoConstants,
-    MemberGuard,
-    AdapterGuard
-{
+contract SignaturesContract is ISignatures, AdapterGuard, Reimbursable {
     struct ProposalDetails {
         bytes32 permissionHash;
         bytes32 signatureHash;
@@ -48,13 +43,6 @@ contract SignaturesContract is
 
     // keeps track of all signature proposals handled by each dao
     mapping(address => mapping(bytes32 => ProposalDetails)) public proposals;
-
-    /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
 
     /**
      * @notice Creates and sponsors a signature proposal.
@@ -66,6 +54,7 @@ contract SignaturesContract is
      * @param magicValue The value to return when a signature is valid
      * @param data Additional details about the signature proposal.
      */
+    // slither-disable-next-line reentrancy-benign
     function submitProposal(
         DaoRegistry dao,
         bytes32 proposalId,
@@ -73,7 +62,7 @@ contract SignaturesContract is
         bytes32 signatureHash,
         bytes4 magicValue,
         bytes memory data
-    ) external override reentrancyGuard(dao) {
+    ) external override reimbursable(dao) {
         dao.submitProposal(proposalId);
 
         ProposalDetails storage proposal = proposals[address(dao)][proposalId];
@@ -81,14 +70,15 @@ contract SignaturesContract is
         proposal.signatureHash = signatureHash;
         proposal.magicValue = magicValue;
 
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
-        address sponsoredBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
+        IVoting votingContract = IVoting(
+            dao.getAdapterAddress(DaoHelper.VOTING)
+        );
+        address sponsoredBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
 
         dao.sponsorProposal(proposalId, sponsoredBy, address(votingContract));
         votingContract.startNewVotingForProposal(dao, proposalId, data);
@@ -102,11 +92,10 @@ contract SignaturesContract is
      * @param dao The DAO Address.
      * @param proposalId The proposal id.
      */
-    function processProposal(DaoRegistry dao, bytes32 proposalId)
-        external
-        override
-        reentrancyGuard(dao)
-    {
+    function processProposal(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external override reimbursable(dao) {
         ProposalDetails memory details = proposals[address(dao)][proposalId];
 
         IVoting votingContract = IVoting(dao.votingAdapter(proposalId));
@@ -118,10 +107,12 @@ contract SignaturesContract is
             "proposal needs to pass"
         );
         dao.processProposal(proposalId);
-        ERC1271Extension erc1271 =
-            ERC1271Extension(dao.getExtensionAddress(ERC1271));
+        ERC1271Extension erc1271 = ERC1271Extension(
+            dao.getExtensionAddress(DaoHelper.ERC1271)
+        );
 
         erc1271.sign(
+            dao,
             details.permissionHash,
             details.signatureHash,
             details.magicValue

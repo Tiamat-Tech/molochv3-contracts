@@ -2,13 +2,11 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
-import "../utils/PotentialNewMember.sol";
 import "../extensions/bank/Bank.sol";
+import "../helpers/DaoHelper.sol";
 import "../adapters/interfaces/IVoting.sol";
-import "../guards/MemberGuard.sol";
-import "../guards/AdapterGuard.sol";
+import "./modifiers/Reimbursable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -37,12 +35,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract TributeContract is
-    DaoConstants,
-    MemberGuard,
-    AdapterGuard,
-    PotentialNewMember
-{
+contract TributeContract is Reimbursable, AdapterGuard {
     using Address for address;
     using SafeERC20 for IERC20;
 
@@ -70,13 +63,6 @@ contract TributeContract is
     mapping(address => mapping(bytes32 => ProposalDetails)) public proposals;
 
     /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
-
-    /**
      * @notice Configures the adapter for a particular DAO.
      * @notice Registers the DAO internal token with the DAO Bank.
      * @dev Only adapters registered to the DAO can execute the function call (or if the DAO is in creation mode).
@@ -84,12 +70,14 @@ contract TributeContract is
      * @param dao The DAO address.
      * @param tokenAddrToMint The internal token address to be registered with the DAO Bank.
      */
-    function configureDao(DaoRegistry dao, address tokenAddrToMint)
-        external
-        onlyAdapter(dao)
-    {
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-        bank.registerPotentialNewInternalToken(tokenAddrToMint);
+    function configureDao(
+        DaoRegistry dao,
+        address tokenAddrToMint
+    ) external onlyAdapter(dao) {
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
+        bank.registerPotentialNewInternalToken(dao, tokenAddrToMint);
     }
 
     /**
@@ -106,6 +94,7 @@ contract TributeContract is
      * @param tributeTokenOwner The owner of the ERC-20 tokens being provided as tribute.
      * @param data Additional information related to the tribute proposal.
      */
+    // slither-disable-next-line reentrancy-benign
     function submitProposal(
         DaoRegistry dao,
         bytes32 proposalId,
@@ -116,27 +105,28 @@ contract TributeContract is
         uint256 tributeAmount,
         address tributeTokenOwner,
         bytes memory data
-    ) external reentrancyGuard(dao) {
+    ) external reimbursable(dao) {
         require(
-            isNotReservedAddress(applicant),
+            DaoHelper.isNotReservedAddress(applicant),
             "applicant is reserved address"
         );
 
         dao.submitProposal(proposalId);
-        IVoting votingContract = IVoting(dao.getAdapterAddress(VOTING));
-        address sponsoredBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
+        IVoting votingContract = IVoting(
+            dao.getAdapterAddress(DaoHelper.VOTING)
+        );
+        address sponsoredBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
 
         dao.sponsorProposal(proposalId, sponsoredBy, address(votingContract));
-        potentialNewMember(
+        DaoHelper.potentialNewMember(
             applicant,
             dao,
-            BankExtension(dao.getExtensionAddress(BANK))
+            BankExtension(dao.getExtensionAddress(DaoHelper.BANK))
         );
 
         votingContract.startNewVotingForProposal(dao, proposalId, data);
@@ -162,10 +152,10 @@ contract TributeContract is
      * @param dao The DAO address.
      * @param proposalId The proposal id.
      */
-    function processProposal(DaoRegistry dao, bytes32 proposalId)
-        external
-        reentrancyGuard(dao)
-    {
+    function processProposal(
+        DaoRegistry dao,
+        bytes32 proposalId
+    ) external reimbursable(dao) {
         ProposalDetails memory proposal = proposals[address(dao)][proposalId];
         require(proposal.id == proposalId, "proposal does not exist");
         require(
@@ -179,13 +169,17 @@ contract TributeContract is
         IVoting votingContract = IVoting(dao.votingAdapter(proposalId));
         require(address(votingContract) != address(0), "adapter not found");
 
-        IVoting.VotingState voteResult =
-            votingContract.voteResult(dao, proposalId);
+        IVoting.VotingState voteResult = votingContract.voteResult(
+            dao,
+            proposalId
+        );
 
         dao.processProposal(proposalId);
 
         if (voteResult == IVoting.VotingState.PASS) {
-            BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+            BankExtension bank = BankExtension(
+                dao.getExtensionAddress(DaoHelper.BANK)
+            );
             address tokenToMint = proposal.tokenToMint;
             address applicant = proposal.applicant;
             uint256 tributeAmount = proposal.tributeAmount;
@@ -196,7 +190,7 @@ contract TributeContract is
             );
 
             if (!bank.isTokenAllowed(proposal.token)) {
-                bank.registerPotentialNewToken(proposal.token);
+                bank.registerPotentialNewToken(dao, proposal.token);
             }
             IERC20 erc20 = IERC20(proposal.token);
             erc20.safeTransferFrom(
@@ -205,8 +199,18 @@ contract TributeContract is
                 tributeAmount
             );
 
-            bank.addToBalance(applicant, tokenToMint, proposal.requestAmount);
-            bank.addToBalance(GUILD, proposal.token, tributeAmount);
+            bank.addToBalance(
+                dao,
+                applicant,
+                tokenToMint,
+                proposal.requestAmount
+            );
+            bank.addToBalance(
+                dao,
+                DaoHelper.GUILD,
+                proposal.token,
+                tributeAmount
+            );
         } else if (
             voteResult == IVoting.VotingState.NOT_PASS ||
             voteResult == IVoting.VotingState.TIE

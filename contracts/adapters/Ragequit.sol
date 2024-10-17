@@ -2,11 +2,11 @@ pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
 
-import "../core/DaoConstants.sol";
 import "../core/DaoRegistry.sol";
 import "../extensions/bank/Bank.sol";
 import "./interfaces/IRagequit.sol";
 import "../helpers/FairShareHelper.sol";
+import "../helpers/DaoHelper.sol";
 import "../guards/AdapterGuard.sol";
 
 /**
@@ -33,23 +33,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
+contract RagequitContract is IRagequit, AdapterGuard {
     /**
      * @notice Event emitted when a member of the DAO executes a ragequit with all or parts of the member's units/loot.
      */
     event MemberRagequit(
+        address daoAddress,
         address memberAddr,
         uint256 burnedUnits,
         uint256 burnedLoot,
         uint256 initialTotalUnitsAndLoot
     );
-
-    /**
-     * @notice default fallback function to prevent from sending ether to the contract.
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
 
     /**
      * @notice Allows a member or advisor of the DAO to opt out by burning the proportional amount of units/loot of the member.
@@ -70,28 +64,52 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
         uint256 lootToBurn,
         address[] calldata tokens
     ) external override reentrancyGuard(dao) {
-        // At least one token needs to be provided
-        require(tokens.length > 0, "missing tokens");
         // Checks if the are enough units and/or loot to burn
         require(unitsToBurn + lootToBurn > 0, "insufficient units/loot");
         // Gets the delegated address, otherwise returns the sender address.
-        address memberAddr = dao.getAddressIfDelegated(msg.sender);
+        address memberAddr = DaoHelper.msgSender(dao, msg.sender);
+        bool jailed = false;
+
+        // slither-disable-next-line unused-return
+        try dao.notJailed((memberAddr)) returns (
+            // slither-disable-next-line uninitialized-local,variable-scope
+            bool notJailed
+        ) {
+            jailed = !notJailed;
+        } catch {}
+
+        if (jailed) {
+            dao.unjailMember(memberAddr);
+        }
 
         // Instantiates the Bank extension to handle the internal balance checks and transfers.
-        BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
+        BankExtension bank = BankExtension(
+            dao.getExtensionAddress(DaoHelper.BANK)
+        );
         // Check if member has enough units to burn.
         require(
-            bank.balanceOf(memberAddr, UNITS) >= unitsToBurn,
+            bank.balanceOf(memberAddr, DaoHelper.UNITS) >= unitsToBurn,
             "insufficient units"
         );
         // Check if the member has enough loot to burn.
         require(
-            bank.balanceOf(memberAddr, LOOT) >= lootToBurn,
+            bank.balanceOf(memberAddr, DaoHelper.LOOT) >= lootToBurn,
             "insufficient loot"
         );
 
         // Start the ragequit process by updating the member's internal account balances.
-        _prepareRagequit(memberAddr, unitsToBurn, lootToBurn, tokens, bank);
+        _prepareRagequit(
+            dao,
+            memberAddr,
+            unitsToBurn,
+            lootToBurn,
+            tokens,
+            bank
+        );
+
+        if (jailed) {
+            dao.jailMember(memberAddr);
+        }
     }
 
     /**
@@ -102,7 +120,9 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
      * @param tokens The array of tokens that the funds should be sent to.
      * @param bank The bank extension.
      */
+    // slither-disable-next-line reentrancy-events
     function _prepareRagequit(
+        DaoRegistry dao,
         address memberAddr,
         uint256 unitsToBurn,
         uint256 lootToBurn,
@@ -112,20 +132,32 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
         // Calculates the total units, loot and locked loot before any internal transfers
         // it considers the locked loot to be able to calculate the fair amount to ragequit,
         // but locked loot can not be burned.
-        uint256 initialTotalUnitsAndLoot =
-            bank.balanceOf(TOTAL, UNITS) + bank.balanceOf(TOTAL, LOOT);
+        uint256 totalTokens = DaoHelper.totalTokens(bank);
 
         // Burns / subtracts from member's balance the number of units to burn.
-        bank.subtractFromBalance(memberAddr, UNITS, unitsToBurn);
+        bank.internalTransfer(
+            dao,
+            memberAddr,
+            DaoHelper.GUILD,
+            DaoHelper.UNITS,
+            unitsToBurn
+        );
         // Burns / subtracts from member's balance the number of loot to burn.
-        bank.subtractFromBalance(memberAddr, LOOT, lootToBurn);
+        bank.internalTransfer(
+            dao,
+            memberAddr,
+            DaoHelper.GUILD,
+            DaoHelper.LOOT,
+            lootToBurn
+        );
 
         // Completes the ragequit process by updating the GUILD internal balance based on each provided token.
         _burnUnits(
+            dao,
             memberAddr,
             unitsToBurn,
             lootToBurn,
-            initialTotalUnitsAndLoot,
+            totalTokens,
             tokens,
             bank
         );
@@ -142,6 +174,7 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
      * @param bank The bank extension.
      */
     function _burnUnits(
+        DaoRegistry dao,
         address memberAddr,
         uint256 unitsToBurn,
         uint256 lootToBurn,
@@ -164,15 +197,16 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
             }
 
             // Checks if the token is supported by the Guild Bank.
+            //slither-disable-next-line calls-loop
             require(bank.isTokenAllowed(currentToken), "token not allowed");
 
             // Calculates the fair amount of funds to ragequit based on the token, units and loot
-            uint256 amountToRagequit =
-                FairShareHelper.calc(
-                    bank.balanceOf(GUILD, currentToken),
-                    unitsAndLootToBurn,
-                    initialTotalUnitsAndLoot
-                );
+            //slither-disable-next-line calls-loop
+            uint256 amountToRagequit = FairShareHelper.calc(
+                bank.balanceOf(DaoHelper.GUILD, currentToken),
+                unitsAndLootToBurn,
+                initialTotalUnitsAndLoot
+            );
 
             // Ony execute the internal transfer if the user has enough funds to receive.
             if (amountToRagequit > 0) {
@@ -180,8 +214,10 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
                 // deliberately not using safemath here to keep overflows from preventing the function execution
                 // (which would break ragekicks) if a token overflows,
                 // it is because the supply was artificially inflated to oblivion, so we probably don"t care about it anyways
+                //slither-disable-next-line calls-loop
                 bank.internalTransfer(
-                    GUILD,
+                    dao,
+                    DaoHelper.GUILD,
                     memberAddr,
                     currentToken,
                     amountToRagequit
@@ -189,8 +225,11 @@ contract RagequitContract is IRagequit, DaoConstants, AdapterGuard {
             }
         }
 
-        // Once the units and loot were burned, and the transfers completed, emit an event to indicate a successfull operation.
+        // Once the units and loot were burned, and the transfers completed,
+        // emit an event to indicate a successfull operation.
+        //slither-disable-next-line reentrancy-events
         emit MemberRagequit(
+            address(dao),
             memberAddr,
             unitsToBurn,
             lootToBurn,

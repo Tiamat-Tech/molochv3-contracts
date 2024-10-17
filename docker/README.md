@@ -1,38 +1,117 @@
-# Graph Node Docker Image
+## Launching a Tribute DAO on Goerli
 
-Preconfigured Docker image for running a Graph Node.
+### 1. Clone tribute-contracts repository
 
-## Usage
+Make sure you are using branch `release-v2.4.0`. This is the branch that contains the latest contracts.
 
-Start ganache with `ganache-cli --host 0.0.0.0 --port 7545 --networkId 1337 --blockTime 10 --mnemonic "twelve words including quotes"` in one terminal window.
+- > cd tribute-contracts
+- > git fetch origin release-v2.4.0
+- > git checkout release-v2.4.0
 
-> Note that -h 0.0.0.0 is necessary for Ganache to be accessible from within Docker and from other machines. By default, Ganache only binds to 127.0.0.1, which can only be accessed from the host machine that Ganache runs on. [The Graph]
+### 2. Set the env vars
 
-[the graph]: https://thegraph.com/docs/quick-start#1.-set-up-ganache-cli
+In the root of `tribute-contracts` folder create a `.env` file. This file will contain all the environment variables required by the deployment script. Most of these variables are configurations that are applied to the DAO contracts during the deployment. Please use the following template:
 
-In a new terminal window, `npm run deploy:ganache` and copy the `DaoFactory` contract address and block number into the respective `address` and `startBlock` (important: make sure the block number starts from 1 previous block, for example, if the block number is 19 add 18 as the `startBlock`) for the `DaoFactory` source in `subgraph/subgraph.yaml`.
+```
+######################## Tribute Contracts env vars ########################
 
-Then, `cd docker/` and `docker-compose up`.
+# Set the name of your DAO. Make sure the DAO name is unique.
+DAO_NAME=My Tribute DAO xyz...
 
-This will start IPFS, Postgres and Graph Node in Docker and create persistent
-data directories for IPFS and Postgres in `./data/ipfs` and `./data/postgres`. You
-can access these via:
+# The public ethereum address that belongs to the Owner of the DAO,
+# in this case, it is your public ethereum address on the Goerli network.
+# Make sure you have some ETH, otherwise the deployment will fail.
+# It needs to be the address of the first account you have in metamask accounts,
+# otherwise it won't work.
+DAO_OWNER_ADDR=0x...
 
-- Graph Node:
-  - GraphiQL: `http://localhost:8000/`
-  - HTTP: `http://localhost:8000/subgraphs/name/<subgraph-name>`
-  - WebSockets: `ws://localhost:8001/subgraphs/name/<subgraph-name>`
-  - Admin: `http://localhost:8020/`
-- IPFS:
-  - `127.0.0.1:5001` or `/ip4/127.0.0.1/tcp/5001`
-- Postgres:
-  - `postgresql://graph-node:let-me-in@localhost:5432/graph-node`
+# The name of the ERC20 token of your DAO.
+ERC20_TOKEN_NAME=My First DAO Token
 
-Once this is up and running, you can create and deploy your subgraph to the running Graph Node. To do this, in another terminal window from the project root directory, `truffle compile` to build the contracts, if they aren't already built.
+# The symbol of your ERC20 Token that will be used to control the
+# DAO units that each member holds.
+ERC20_TOKEN_SYMBOL=TDAO
 
-Then from the `subgraph` directory:
+# Number of decimals to display the token units in MM. We usually
+# set 0 because the DAO units are managed in WEI, and to be able
+# to see that in the MM wallet you need to remove the precision.
+ERC20_TOKEN_DECIMALS=0
 
-- `npm ci` to install dependencies
-- `npm run codegen` to run the code generation
-- `yarn create-local` to allocate the subgraph name in the Graph Node
-- `yarn deploy-local` to deploy the subgraph to your local Graph Node
+# The Ethereum Node URL to connect the Ethereum network. You can follow
+# these steps to get your ProjectId/API Key from Infura:
+# https://blog.infura.io/getting-started-with-infura-28e41844cc89/
+# Set your own Infura/Alchemy API keys
+ETH_NODE_URL=https://goerli.infura.io/v3/<set-your-api-key-here>
+#ETH_NODE_URL=https://eth-goerli.alchemyapi.io/v2/<set-your-api-key-here>
+
+# The 12 word "secret recovery phrase" for the ethereum address
+# referenced in DAO_OWNER_ADDR above. This can be found in your wallet.
+# It will be used to create the HD wallet and sign transactions on your behalf.
+WALLET_MNEMONIC=...
+
+# You can set that to use the same address you have in the DAO_OWNER_ADDR
+COUPON_CREATOR_ADDR=0x...
+KYC_COUPON_CREATOR_ADDR=0x...
+```
+
+### 3. Installing the dependencies and deploying the contracts
+
+With the environment variables ready, we can install the project dependencies and start the deployment process.
+
+Using NodeJS v16.x, run:
+
+- > npm run build && npm run deploy goerli
+
+### 4. Set the tribute-ui environment variables
+
+After all contracts are deployed it is time to prepare the dApp, so it can interact with the DAO.
+
+In the same `.env` file created under the `tribute-contracts` folder, add the following environment variables:
+
+```
+######################## Tribute UI env vars ########################
+
+# Configure the UI to use the Goerli network for local development
+REACT_APP_DEFAULT_CHAIN_NAME_LOCAL=GOERLI
+
+# It can be the same value you used for the Tribute DAO deployment.
+REACT_APP_INFURA_PROJECT_ID_DEV=set-your-infura-api-key-here
+
+# The address of the Multicall smart contract deployed to the Goerli network.
+# Copy that from the tribute-contracts/build/deployed/contracts-goerli-YYYY-MM-DD-HH:mm:ss.json
+REACT_APP_MULTICALL_CONTRACT_ADDRESS=0x...
+
+# The address of the DaoRegistry smart contract deployed to the Goerli network.
+# Copy that from the tribute-contracts/build/deployed/contracts-goerli-YYYY-MM-DD-HH:mm:ss.json
+REACT_APP_DAO_REGISTRY_CONTRACT_ADDRESS=0x...
+
+# Enable Goerli network for Tribute UI
+REACT_APP_ENVIRONMENT=development
+```
+
+Make sure you have set the correct addresses for `REACT_APP_MULTICALL_CONTRACT_ADDRESS` & `REACT_APP_DAO_REGISTRY_CONTRACT_ADDRESS`.
+
+### 5. Launching your DAO
+
+The contracts were deployed and the configurations were prepared, now it is time to spin up the DAO using docker-compose.
+
+From the `tribute-contracts/docker` folder, run:
+
+- > docker-compose up
+
+Wait for the following output:
+
+```
+    trib-ui              | Compiled successfully!
+    trib-ui              |
+    trib-ui              | You can now view tribute-ui in the browser.
+    trib-ui              |
+    trib-ui              |   Local:            http://localhost:3000
+    trib-ui              |   On Your Network:  http://a.b.c.d:3000
+    trib-ui              |
+    trib-ui              | Note that the development build is not optimized.
+    trib-ui              | To create a production build, use npm run build.
+    ...
+```
+
+Done. Your DAO was launched! You can access it at http://localhost:3000

@@ -4,7 +4,6 @@ pragma solidity ^0.8.0;
 
 import "../../core/DaoRegistry.sol";
 import "../../extensions/bank/Bank.sol";
-import "../../core/DaoConstants.sol";
 import "../../guards/MemberGuard.sol";
 import "../../guards/AdapterGuard.sol";
 import "../interfaces/IVoting.sol";
@@ -57,26 +56,6 @@ contract SnapshotProposalContract {
     bytes32 public constant VOTE_PAYLOAD_TYPEHASH =
         keccak256(abi.encodePacked(VOTE_PAYLOAD_TYPE));
 
-    uint256 public chainId;
-
-    function DOMAIN_SEPARATOR(DaoRegistry dao, address actionId)
-        public
-        view
-        returns (bytes32)
-    {
-        return
-            keccak256(
-                abi.encode(
-                    EIP712_DOMAIN_TYPEHASH,
-                    keccak256("Snapshot Message"), // string name
-                    keccak256("4"), // string version
-                    chainId, // uint256 chainId
-                    address(dao), // address verifyingContract,
-                    actionId
-                )
-            );
-    }
-
     struct ProposalMessage {
         uint256 timestamp;
         bytes32 spaceHash;
@@ -104,15 +83,28 @@ contract SnapshotProposalContract {
         bytes32 proposalId;
     }
 
-    constructor(uint256 _chainId) {
-        chainId = _chainId;
+    function DOMAIN_SEPARATOR(
+        DaoRegistry dao,
+        address actionId
+    ) public view returns (bytes32) {
+        return
+            keccak256(
+                abi.encode(
+                    EIP712_DOMAIN_TYPEHASH,
+                    keccak256("Snapshot Message"), // string name
+                    keccak256("4"), // string version
+                    block.chainid, // uint256 chainId
+                    address(dao), // address verifyingContract,
+                    actionId
+                )
+            );
     }
 
     function hashMessage(
         DaoRegistry dao,
         address actionId,
         ProposalMessage memory message
-    ) public view returns (bytes32) {
+    ) external view returns (bytes32) {
         return
             keccak256(
                 abi.encodePacked(
@@ -123,11 +115,9 @@ contract SnapshotProposalContract {
             );
     }
 
-    function hashProposalMessage(ProposalMessage memory message)
-        public
-        pure
-        returns (bytes32)
-    {
+    function hashProposalMessage(
+        ProposalMessage memory message
+    ) public pure returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -139,11 +129,9 @@ contract SnapshotProposalContract {
             );
     }
 
-    function hashProposalPayload(ProposalPayload memory payload)
-        public
-        pure
-        returns (bytes32)
-    {
+    function hashProposalPayload(
+        ProposalPayload memory payload
+    ) public pure returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -162,7 +150,7 @@ contract SnapshotProposalContract {
         DaoRegistry dao,
         address actionId,
         VoteMessage memory message
-    ) public view returns (bytes32) {
+    ) external view returns (bytes32) {
         return
             keccak256(
                 abi.encodePacked(
@@ -173,11 +161,9 @@ contract SnapshotProposalContract {
             );
     }
 
-    function hashVoteInternal(VoteMessage memory message)
-        public
-        pure
-        returns (bytes32)
-    {
+    function hashVoteInternal(
+        VoteMessage memory message
+    ) public pure returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -188,11 +174,9 @@ contract SnapshotProposalContract {
             );
     }
 
-    function hashVotePayload(VotePayload memory payload)
-        public
-        pure
-        returns (bytes32)
-    {
+    function hashVotePayload(
+        VotePayload memory payload
+    ) public pure returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -203,11 +187,9 @@ contract SnapshotProposalContract {
             );
     }
 
-    function toHashArray(string[] memory arr)
-        internal
-        pure
-        returns (bytes32[] memory result)
-    {
+    function toHashArray(
+        string[] memory arr
+    ) internal pure returns (bytes32[] memory result) {
         result = new bytes32[](arr.length);
         for (uint256 i = 0; i < arr.length; i++) {
             result[i] = keccak256(abi.encodePacked(arr[i]));

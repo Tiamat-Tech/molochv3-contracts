@@ -1,25 +1,25 @@
-/**
- * Use this file to configure your truffle project. It's seeded with some
- * common settings for different networks and features like migrations,
- * compilation and testing. Uncomment the ones you need or modify
- * them to suit your project as necessary.
- *
- * More information about configuration can be found at:
- *
- * truffleframework.com/docs/advanced/configuration
- *
- * To deploy via Infura you'll need a wallet provider (like @truffle/hdwallet-provider)
- * to sign your transactions before they're sent to a remote public node. Infura accounts
- * are available for free at: infura.io/register.
- *
- * You'll also need a mnemonic - the twelve word phrase the wallet uses to generate
- * public/private key pairs. If you're publishing your code to GitHub make sure you load this
- * phrase from a file you've .gitignored so it doesn't accidentally become public.
- *
- */
-
 require("dotenv").config();
-require("solidity-coverage");
+require("truffle-plugin-verify");
+require("ts-node").register({
+  files: true,
+});
+
+const getNetworkProvider = () => {
+  const HDWalletProvider = require("@truffle/hdwallet-provider");
+
+  if (!process.env.WALLET_MNEMONIC)
+    throw Error("Missing environment variable: WALLET_MNEMONIC");
+
+  if (!process.env.ETH_NODE_URL)
+    throw Error("Missing environment variable: ETH_NODE_URL");
+
+  return new HDWalletProvider({
+    mnemonic: {
+      phrase: process.env.WALLET_MNEMONIC,
+    },
+    providerOrUrl: process.env.ETH_NODE_URL,
+  });
+};
 
 module.exports = {
   networks: {
@@ -28,55 +28,6 @@ module.exports = {
       port: 7545, // Standard Ethereum port (default: none)
       network_id: "1337", // Any network (default: none)
     },
-    rinkeby: {
-      provider: () => {
-        const HDWalletProvider = require("@truffle/hdwallet-provider");
-        const infuraKey = process.env.INFURA_KEY;
-        const alchemyKey = process.env.ALCHEMY_KEY;
-        const mnemonic = process.env.TRUFFLE_MNEMONIC;
-
-        let url;
-        if (alchemyKey) {
-          url = `wss://eth-rinkeby.ws.alchemyapi.io/v2/${alchemyKey}`;
-        } else {
-          url = `wss://rinkeby.infura.io/ws/v3/${infuraKey}`;
-        }
-        return new HDWalletProvider({
-          mnemonic: {
-            phrase: mnemonic,
-          },
-          providerOrUrl: url,
-          pollingInterval: 10000,
-        });
-      },
-      network_id: 4,
-      skipDryRun: true,
-      networkCheckTimeout: 10000,
-      deploymentPollingInterval: 10000,
-    },
-    mainnet: {
-      provider: () => {
-        const HDWalletProvider = require("@truffle/hdwallet-provider");
-        const infuraKey = process.env.INFURA_KEY;
-        const alchemyKey = process.env.ALCHEMY_KEY;
-        const mnemonic = process.env.TRUFFLE_MNEMONIC;
-
-        let url;
-        if (alchemyKey) {
-          url = `wss://eth-mainnet.ws.alchemyapi.io/v2/${alchemyKey}`;
-        } else {
-          url = `wss://mainnet.infura.io/ws/v3/${infuraKey}`;
-        }
-        return new HDWalletProvider({
-          mnemonic: {
-            phrase: mnemonic,
-          },
-          providerOrUrl: url,
-        });
-      },
-      network_id: 1,
-      skipDryRun: true,
-    },
     coverage: {
       host: "localhost",
       network_id: "*",
@@ -84,25 +35,68 @@ module.exports = {
       gas: 0xfffffffffff,
       gasPrice: 0x01,
     },
+    goerli: {
+      provider: getNetworkProvider,
+      network_id: 5,
+      skipDryRun: true,
+    },
+    sepolia: {
+      provider: getNetworkProvider,
+      network_id: 11155111,
+      skipDryRun: true,
+    },
+    mainnet: {
+      provider: getNetworkProvider,
+      network_id: 1,
+      skipDryRun: true,
+    },
+    gnosis: {
+      provider: getNetworkProvider,
+      network_id: 100,
+      skipDryRun: true,
+    },
+    harmony: {
+      provider: getNetworkProvider,
+      network_id: 1666600000,
+      skipDryRun: true,
+    },
+    harmonytest: {
+      provider: getNetworkProvider,
+      network_id: 1666700000,
+      skipDryRun: true,
+    },
+    polygon: {
+      provider: getNetworkProvider,
+      network_id: 137,
+      skipDryRun: true,
+    },
+    polygontest: {
+      provider: getNetworkProvider,
+      network_id: 80001,
+      skipDryRun: true,
+      gasPrice: 10000000000,
+    },
   },
 
   // Configure your compilers
   compilers: {
     solc: {
-      version: "0.8.0", // Fetch exact version from solc-bin (default: truffle's version)
+      version: "0.8.9", // Fetch exact version from solc-bin (default: truffle's version)
       // docker: true,        // Use "0.5.1" you've installed locally with docker (default: false)
       settings: {
         // See the solidity docs for advice about optimization and evmVersion
         optimizer: {
-          enabled: true,
-          runs: 10000,
+          enabled: !(process.env.SOLC_OPTIMIZER === "false"),
+          runs: 200,
         },
         //  evmVersion: "byzantium"
       },
     },
   },
+  // Supported chains: https://github.com/rkalis/truffle-plugin-verify?tab=readme-ov-file#supported-chains
   api_keys: {
     etherscan: process.env.ETHERSCAN_API_KEY, // Obtain one at https://etherscan.io/myapikey
+    polygonscan: process.env.POLYGONSCAN_API_KEY, // Obtain one at https://polygonscan.com/myapikey
   },
-  plugins: ["solidity-coverage", "truffle-plugin-verify"],
+  plugins: ["truffle-plugin-verify"],
 };

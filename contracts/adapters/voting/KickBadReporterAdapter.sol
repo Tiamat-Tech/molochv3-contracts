@@ -4,7 +4,6 @@ pragma solidity ^0.8.0;
 
 import "../../core/DaoRegistry.sol";
 import "../../extensions/bank/Bank.sol";
-import "../../core/DaoConstants.sol";
 import "../../helpers/GuildKickHelper.sol";
 import "../../guards/MemberGuard.sol";
 import "../../guards/AdapterGuard.sol";
@@ -36,67 +35,58 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract KickBadReporterAdapter is DaoConstants, MemberGuard {
-    /*
-     * default fallback function to prevent from sending ether to the contract
-     */
-    receive() external payable {
-        revert("fallback revert");
-    }
-
+contract KickBadReporterAdapter is MemberGuard {
     function sponsorProposal(
         DaoRegistry dao,
         bytes32 proposalId,
         bytes calldata data
     ) external {
-        OffchainVotingContract votingContract =
-            OffchainVotingContract(dao.getAdapterAddress(VOTING));
-        address sponsoredBy =
-            votingContract.getSenderAddress(
-                dao,
-                address(this),
-                data,
-                msg.sender
-            );
-        _sponsorProposal(dao, proposalId, data, sponsoredBy, votingContract);
-    }
-
-    function _sponsorProposal(
-        DaoRegistry dao,
-        bytes32 proposalId,
-        bytes memory data,
-        address sponsoredBy,
-        OffchainVotingContract votingContract
-    ) internal onlyMember2(dao, sponsoredBy) {
+        OffchainVotingContract votingContract = _getVotingContract(dao);
+        address sponsoredBy = votingContract.getSenderAddress(
+            dao,
+            address(this),
+            data,
+            msg.sender
+        );
         votingContract.sponsorChallengeProposal(dao, proposalId, sponsoredBy);
         votingContract.startNewVotingForProposal(dao, proposalId, data);
     }
 
     function processProposal(DaoRegistry dao, bytes32 proposalId) external {
-        OffchainVotingContract votingContract =
-            OffchainVotingContract(dao.getAdapterAddress(VOTING));
-
+        OffchainVotingContract votingContract = _getVotingContract(dao);
         votingContract.processChallengeProposal(dao, proposalId);
 
-        IVoting.VotingState votingState =
-            votingContract.voteResult(dao, proposalId);
+        IVoting.VotingState votingState = votingContract.voteResult(
+            dao,
+            proposalId
+        );
         // the person has been kicked out
         if (votingState == IVoting.VotingState.PASS) {
-            (, address challengeAddress) =
-                votingContract.getChallengeDetails(dao, proposalId);
+            //slither-disable-next-line variable-scope
+            (, address challengeAddress) = votingContract.getChallengeDetails(
+                dao,
+                proposalId
+            );
             GuildKickHelper.rageKick(dao, challengeAddress);
         } else if (
             votingState == IVoting.VotingState.NOT_PASS ||
             votingState == IVoting.VotingState.TIE
         ) {
-            (uint256 units, address challengeAddress) =
-                votingContract.getChallengeDetails(dao, proposalId);
-            BankExtension bank = BankExtension(dao.getExtensionAddress(BANK));
-
-            bank.subtractFromBalance(challengeAddress, LOOT, units);
-            bank.addToBalance(challengeAddress, UNITS, units);
+            //slither-disable-next-line uninitialized-local,variable-scope
+            (, address challengeAddress) = votingContract.getChallengeDetails(
+                dao,
+                proposalId
+            );
+            dao.unjailMember(challengeAddress);
         } else {
             revert("vote not finished yet");
         }
+    }
+
+    function _getVotingContract(
+        DaoRegistry dao
+    ) internal view returns (OffchainVotingContract) {
+        address addr = dao.getAdapterAddress(DaoHelper.VOTING);
+        return OffchainVotingContract(payable(addr));
     }
 }

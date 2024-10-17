@@ -1,10 +1,11 @@
 pragma solidity ^0.8.0;
 
 // SPDX-License-Identifier: MIT
-import "../../../core/DaoConstants.sol";
 import "../../../core/DaoRegistry.sol";
 import "../../../core/CloneFactory.sol";
+import "../../IFactory.sol";
 import "./ERC20TokenExtension.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
 MIT License
@@ -30,29 +31,57 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-contract ERC20TokenExtensionFactory is CloneFactory, DaoConstants {
+contract ERC20TokenExtensionFactory is IFactory, CloneFactory, ReentrancyGuard {
     address public identityAddress;
 
-    event ERC20TokenExtensionCreated(address erc20ExtTokenAddress);
+    event ERC20TokenExtensionCreated(
+        address daoAddress,
+        address extensionAddress
+    );
+
+    mapping(address => address) private _extensions;
 
     constructor(address _identityAddress) {
+        require(_identityAddress != address(0x0), "invalid addr");
         identityAddress = _identityAddress;
     }
 
     /**
-     * @notice Creates a clone of the ERC20 Token Extension.
+     * @notice Creates a new extension using clone factory.
+     * @notice It can set additional arguments to the extension.
+     * @notice It initializes the extension and sets the DAO owner as the extension creator.
+     * @notice The safest way to read the new extension address is to read it from the event.
+     * @param dao The dao address that will be associated with the new extension.
+     * @param tokenAddress The address of the ERC20 token.
+     * @param decimals The number of decimal places of the ERC20 token.
      */
+    // slither-disable-next-line reentrancy-events
     function create(
-        string calldata tokenName,
+        DaoRegistry dao,
         address tokenAddress,
-        string calldata tokenSymbol,
         uint8 decimals
-    ) external {
-        ERC20Extension ext = ERC20Extension(_createClone(identityAddress));
-        ext.setName(tokenName);
-        ext.setToken(tokenAddress);
-        ext.setSymbol(tokenSymbol);
-        ext.setDecimals(decimals);
-        emit ERC20TokenExtensionCreated(address(ext));
+    ) external nonReentrant {
+        address daoAddress = address(dao);
+        require(daoAddress != address(0x0), "invalid dao addr");
+        address payable extensionAddr = _createClone(identityAddress);
+        _extensions[daoAddress] = extensionAddr;
+        ERC20Extension extension = ERC20Extension(extensionAddr);
+        extension.setToken(tokenAddress);
+        extension.setDecimals(decimals);
+        extension.initialize(dao, address(0));
+        // slither-disable-next-line reentrancy-events
+        emit ERC20TokenExtensionCreated(daoAddress, address(extension));
+    }
+
+    /**
+     * @notice Returns the extension address created for that DAO, or 0x0... if it does not exist.
+     * @notice Do not rely on the result returned by this right after the new extension is cloned,
+     * because it is prone to front-running attacks. During the extension creation it is safer to
+     * read the new extension address from the event generated in the create call transaction.
+     */
+    function getExtensionAddress(
+        address dao
+    ) external view override returns (address) {
+        return _extensions[dao];
     }
 }

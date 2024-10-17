@@ -1,4 +1,4 @@
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.9;
 
 // SPDX-License-Identifier: MIT
 
@@ -26,10 +26,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //solhint-disable no-inline-assembly
 
 contract CloneFactory {
-    function _createClone(address target)
-        internal
-        returns (address payable result)
-    {
+    function _createClone(
+        address target
+    ) internal returns (address payable result) {
         bytes20 targetBytes = bytes20(target);
         assembly {
             let clone := mload(0x40)
@@ -44,13 +43,13 @@ contract CloneFactory {
             )
             result := create(0, clone, 0x37)
         }
+        require(result != address(0), "create failed");
     }
 
-    function _isClone(address target, address query)
-        internal
-        view
-        returns (bool result)
-    {
+    function _isClone(
+        address target,
+        address query
+    ) internal view returns (bool result) {
         bytes20 targetBytes = bytes20(target);
         assembly {
             let clone := mload(0x40)
